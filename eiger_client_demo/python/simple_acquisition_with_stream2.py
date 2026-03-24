@@ -4,7 +4,8 @@ EIGER demo: 1000 images in one batch over the stream v2 interface (CBOR), with a
 software (internal) trigger and one energy threshold.
 
 Workflow: connect to the DCU; call initialize if state is not idle; configure detector
-timing and thresholds; read high voltage state, temperature, and humidity; enable stream
+(see CONFIGURATION IMPORTANT: corrections, counting_mode, thresholds, no photon_energy;
+monitor/filewriter off, stream on); read high voltage state, temperature, and humidity; enable stream
 (monitor and filewriter off), format CBOR; arm; send trigger(s). The detector must be
 armed before it accepts trigger.
 
@@ -54,12 +55,22 @@ if __name__ == '__main__':
         c.sendDetectorCommand("initialize")
 
     # =============================================================================
-    # CONFIGURATION
+    # CONFIGURATION  (IMPORTANT)
     # =============================================================================
+    # Detector (Simplon-style layout for this stream demo):
+    #   Disable: countrate_correction_applied, retrigger, flatfield_correction_applied,
+    #            auto_summation.
+    #   counting_mode is a string parameter (not a bool): set explicitly as required;
+    #   this demo uses 'normal'.
+    #   Enable: virtual_pixel_correction_applied, mask_to_zero.
+    #   Then: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
+    #   Do NOT set photon_energy: it can overwrite threshold-related settings.
+    # Data path:
+    #   Disable monitor; disable filewriter; enable stream (CBOR etc. below).
     # Usual settings for polychromatic beam
     c.setDetectorConfig("countrate_correction_applied", False)
     c.setDetectorConfig('retrigger', False)
-    c.setDetectorConfig('counting_mode', 'normal')
+    c.setDetectorConfig('counting_mode', 'normal')  # see IMPORTANT: mode string, not "disabled"
     c.setDetectorConfig("flatfield_correction_applied", False)
     c.setDetectorConfig('virtual_pixel_correction_applied', True)
     c.setDetectorConfig('mask_to_zero', True)

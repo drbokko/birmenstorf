@@ -2,8 +2,9 @@
  * EIGER demo: 1000 images in one batch over the stream v2 interface (CBOR), with a single
  * software (internal) trigger and one energy threshold.
  *
- * Workflow: connect to the DCU; initialize if state is not idle; configure detector timing
- * and thresholds; read high voltage state, temperature, and humidity; enable stream
+ * Workflow: connect to the DCU; initialize if state is not idle; configure detector (see
+ * CONFIGURATION IMPORTANT: corrections, counting_mode, thresholds, no photon_energy; monitor/
+ * filewriter off, stream on); read high voltage state, temperature, and humidity; enable stream
  * (monitor and filewriter off), format CBOR; arm; send trigger(s). The detector must be
  * armed before it accepts trigger.
  *
@@ -108,12 +109,22 @@ int main(int argc, char *argv[]) {
     }
 
     // =============================================================================
-    // CONFIGURATION
+    // CONFIGURATION  (IMPORTANT)
     // =============================================================================
+    // Detector (Simplon-style layout for this stream demo):
+    //   Disable: countrate_correction_applied, retrigger, flatfield_correction_applied,
+    //            auto_summation.
+    //   counting_mode is a string parameter (not a bool): set explicitly as required;
+    //   this demo uses "normal".
+    //   Enable: virtual_pixel_correction_applied, mask_to_zero.
+    //   Then: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
+    //   Do NOT set photon_energy: it can overwrite threshold-related settings.
+    // Data path:
+    //   Disable monitor; disable filewriter; enable stream (CBOR etc. below).
     // Usual settings for polychromatic beam
     dcu.setDetectorConfig("countrate_correction_applied", "false");
     dcu.setDetectorConfig("retrigger", "false");
-    dcu.setDetectorConfig("counting_mode", "\"normal\"");
+    dcu.setDetectorConfig("counting_mode", "\"normal\""); // see IMPORTANT: mode string, not "disabled"
     dcu.setDetectorConfig("flatfield_correction_applied", "false");
     dcu.setDetectorConfig("virtual_pixel_correction_applied", "true");
     dcu.setDetectorConfig("mask_to_zero", "true");

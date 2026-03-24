@@ -4,6 +4,8 @@ This directory contains a small **C++** program and a matching **Python** script
 
 **Simplon API rules (summary).** In normal operation you respect the detector **state**: only apply configuration when allowed for that state; use **`initialize`** when the system is not ready; **`arm`** before the detector will accept **`trigger`**; use **`disarm`** to leave the armed path. Subsystems are separate URLs (`/detector/…`, `/stream/…`, etc.); each PUT carries a JSON body with a **`value`** field as in the reference. This demo follows that ordering; for exact preconditions, allowed parameters, and edge cases, use the official **SIMPLON** documentation for your firmware version.
 
+**Detector configuration checklist** used in both scripts: turn **off** count-rate correction, **retrigger**, flat-field correction, and **auto_summation**; set **`counting_mode`** as a **string** (here **`normal`**); turn **on** virtual-pixel correction and **mask_to_zero**; set thresholds and timing; **avoid `photon_energy`** so thresholds are not overwritten; then **monitor** and **filewriter** **off**, **stream** **on** (step 3 and step 5 below spell this out).
+
 The program **`simple_acquisition_with_stream2`** does **not** implement a stream **receiver**—only DCU-side stream configuration. Run your consumer in **another process** before arming if you must not miss data.
 
 ---
@@ -136,16 +138,35 @@ First **GET** of detector **`state`**. If the DCU is not **idle**, or **`--force
 
 ### 3. Detector configuration
 
-**PUT** calls set detector **config** parameters: counting mode, corrections, **one** enabled threshold (second disabled), then **`count_time`**, **`frame_time`**, **`nimages`**, **`ntrigger`**. Values are passed as JSON-compatible strings where the C API expects them (booleans and quoted strings).
+**PUT** calls set detector **config** parameters. Values are JSON-compatible strings in C++ (booleans and quoted strings).
+
+**Important — configure the detector like this (same in Python and C++):**
+
+- **Disable:** `countrate_correction_applied`, `retrigger`, `flatfield_correction_applied`, `auto_summation` (all off / `false` in this demo).
+- **`counting_mode`:** not a boolean—set the **mode string** your measurement needs; this demo uses **`normal`** (do not read “disable counting_mode” as a boolean flag).
+- **Enable:** `virtual_pixel_correction_applied`, `mask_to_zero`.
+- **Then set:** threshold **mode** and **energy**, **`count_time`**, **`frame_time`**, **`nimages`**, **`ntrigger`**.
+- **Do not set `photon_energy`** here: on many setups it can **overwrite or conflict with threshold** configuration.
+- **Data interfaces (see step 5):** monitor **off**, filewriter **off**, stream **on**.
 
 ```cpp
     // =============================================================================
-    // CONFIGURATION
+    // CONFIGURATION  (IMPORTANT)
     // =============================================================================
+    // Detector (Simplon-style layout for this stream demo):
+    //   Disable: countrate_correction_applied, retrigger, flatfield_correction_applied,
+    //            auto_summation.
+    //   counting_mode is a string parameter (not a bool): set explicitly as required;
+    //   this demo uses "normal".
+    //   Enable: virtual_pixel_correction_applied, mask_to_zero.
+    //   Then: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
+    //   Do NOT set photon_energy: it can overwrite threshold-related settings.
+    // Data path:
+    //   Disable monitor; disable filewriter; enable stream (CBOR etc. below).
     // Usual settings for polychromatic beam
     dcu.setDetectorConfig("countrate_correction_applied", "false");
     dcu.setDetectorConfig("retrigger", "false");
-    dcu.setDetectorConfig("counting_mode", "\"normal\"");
+    dcu.setDetectorConfig("counting_mode", "\"normal\""); // see IMPORTANT: mode string, not "disabled"
     dcu.setDetectorConfig("flatfield_correction_applied", "false");
     dcu.setDetectorConfig("virtual_pixel_correction_applied", "true");
     dcu.setDetectorConfig("mask_to_zero", "true");
@@ -196,7 +217,7 @@ After configuration, the code **reads** status only: **high voltage**, **tempera
 
 ### 5. Data interfaces (stream configuration)
 
-**Monitor** and **filewriter** are disabled; **stream** is enabled with **`format = cbor`** and **`header_detail = all`**. This is the DCU side of **stream v2** delivery. **Receiving** and decoding CBOR frames is **out of scope** for this file and must run elsewhere.
+This matches the **IMPORTANT** checklist: **monitor disabled**, **filewriter disabled**, **stream enabled**. Here the stream uses **`format = cbor`** and **`header_detail = all`** for stream v2–style delivery. This is only the **DCU** side; **receiving** and decoding CBOR frames runs in **another process**.
 
 ```cpp
     // =============================================================================
@@ -267,4 +288,4 @@ The program polls **`state`** until it is **idle** again (acquisition finished),
 
 ## Python
 
-**`python/simple_acquisition_with_stream2.py`** performs the **same steps in the same order**: connect (`DEigerClient` with **`verbose=True`**), **initialize** if not idle, detector **configuration**, housekeeping **GET**s, **monitor** / **filewriter** / **stream** **PUT**s, **arm**, **trigger** loop, wait until **idle**, **disarm**. Use it when you prefer the **`DEigerClient`** API; behavior matches the C++ flow above.
+**`python/simple_acquisition_with_stream2.py`** performs the **same steps in the same order** as the C++ program, including the **CONFIGURATION (IMPORTANT)** comment block (disable/enable list, **no `photon_energy`**, monitor/filewriter off, stream on). Use it when you prefer the **`DEigerClient`** API; behavior matches the C++ flow above.
