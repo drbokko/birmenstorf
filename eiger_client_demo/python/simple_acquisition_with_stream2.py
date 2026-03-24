@@ -1,9 +1,25 @@
 #! /usr/bin/env python3
 """
-Simple EIGER acquisition with stream2-style settings (monitor/filewriter off, stream on).
+EIGER demo: 1000 images in one batch over the stream v2 interface (CBOR), with a single
+software (internal) trigger and one energy threshold.
 
-Mirror of: stream_v2/examples/eiger_client_demo/cpp/simple_acquisition_with_stream2.cpp
+Workflow: connect to the DCU; call initialize if state is not idle; configure detector
+timing and thresholds; read high voltage state, temperature, and humidity; enable stream
+(monitor and filewriter off), format CBOR; arm; send trigger(s). The detector must be
+armed before it accepts trigger.
+
+This script does not implement the stream consumer: run a receiver that connects to the
+detector’s stream v2 endpoint in a separate process. The trigger command may also be
+issued from another process if you coordinate arm/disarm and timing yourself.
+
+Disclaimer: this sequence is a minimal demo (here, one trigger acquires nimages frames).
+For continuous acquisition, increase ntrigger (and configure the detector accordingly)
+rather than relying on a single trigger batch.
+
+Mirror of: cpp/simple_acquisition_with_stream2.cpp
 """
+
+import time
 
 from DEigerClient import DEigerClient
 
@@ -16,8 +32,8 @@ if __name__ == '__main__':
     DCU_IP = 'dev-si-e2dcu-06.dectris.local'
     DCU_PORT = 80
     force_initialization = False  # Force initialization even when already idle
-    # Data acquisition
-    thresholds = [15000]  # Energy thresholds [eV], 1 or 2 values, e.g. [10000, 15000]
+    # Data acquisition (software trigger: trigger command from host; ntrigger=1 → one batch)
+    thresholds = [15000]  # Single threshold [eV]; second threshold disabled below
     number_of_images = 1000
     number_of_triggers = 1  # Each trigger acquires number_of_images frames
     exposure_time = 1.0 / 1000.0  # Count time per image [s] (e.g. 1/fps)
@@ -26,7 +42,7 @@ if __name__ == '__main__':
     # =============================================================================
     # CONNECT TO DETECTOR
     # =============================================================================
-    c = DEigerClient.DEigerClient(host=DCU_IP, port=DCU_PORT)
+    c = DEigerClient.DEigerClient(host=DCU_IP, port=DCU_PORT, verbose=True)
 
     # =============================================================================
     # INITIALIZE
@@ -68,7 +84,7 @@ if __name__ == '__main__':
     print(f'Frame time= {c.detectorConfig("frame_time")["value"]}')
 
     # =============================================================================
-    # DATA ACQUISITION INTERFACES
+    # DATA ACQUISITION INTERFACES (stream v2: CBOR on; consumer runs elsewhere)
     # =============================================================================
     c.setMonitorConfig("mode", "disabled")
     c.setFileWriterConfig('mode', "disabled")
@@ -77,12 +93,14 @@ if __name__ == '__main__':
     c.setStreamConfig('header_detail', 'all')
 
     # =============================================================================
-    # RUN ACQUISITION
+    # RUN ACQUISITION (arm required before trigger; trigger may be moved to another process)
     # =============================================================================
     print("Acquiring data...")
     c.sendDetectorCommand('arm')
-    # Software triggers; comment out if using external trigger
+    # Software trigger from this process; omit this loop if another process sends trigger
     for i in range(number_of_triggers):
         print(f"Triggering image {i+1}/{number_of_triggers}...")
         c.sendDetectorCommand('trigger')
+    while c.detectorStatus('state')['value'] != 'idle':
+        time.sleep(0.1)
     c.sendDetectorCommand("disarm")

@@ -522,7 +522,16 @@ class DEigerClient(object):
         if not self._user is None:
             headers["Authorization"] = "Basic {0}".format(self._user)
 
-        self._log('sending request to {0}'.format(url))
+        if self._verbose:
+            full = 'http://{0}:{1}{2}'.format(self._host, self._port, url)
+            if method == 'PUT' and data is not None and data != '':
+                if isinstance(data, bytes):
+                    ds = data.decode('utf-8', errors='replace')
+                else:
+                    ds = str(data)
+                self._log('[eiger]', method, full, ' body:', ds)
+            else:
+                self._log('[eiger]', method, full)
         numberOfTries = 0
         response = None
         while response is None:

@@ -1,12 +1,27 @@
 /*
- * Simple EIGER acquisition with stream2-style settings (monitor/filewriter off, stream on).
+ * EIGER demo: 1000 images in one batch over the stream v2 interface (CBOR), with a single
+ * software (internal) trigger and one energy threshold.
  *
- * Mirror of: stream_v2/examples/eiger_client_demo/python/simple_acquisition_with_stream2.py
+ * Workflow: connect to the DCU; initialize if state is not idle; configure detector timing
+ * and thresholds; read high voltage state, temperature, and humidity; enable stream
+ * (monitor and filewriter off), format CBOR; arm; send trigger(s). The detector must be
+ * armed before it accepts trigger.
+ *
+ * This program does not implement the stream consumer: run a receiver for the detector’s
+ * stream v2 endpoint in a separate process. The trigger command may also be issued from
+ * another process if you coordinate arm/disarm and timing yourself.
+ *
+ * Disclaimer: minimal demo (here, one trigger acquires nimages frames). For continuous
+ * acquisition, increase ntrigger and configure the detector accordingly.
+ *
+ * Mirror of: python/simple_acquisition_with_stream2.py
  */
 
-#include "eiger_session.hpp"
+#include "eiger_session.hpp" // pulls in eiger_client.h for eiger_set_http_trace
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <thread>
 
 namespace {
 
@@ -58,7 +73,7 @@ int main(int argc, char *argv[]) {
         }
     }
     const int kPort = 80;
-    // Data acquisition (single threshold here; Python may use a list of 1–2)
+    // Data acquisition (software trigger; ntrigger=1 → one batch of nimages frames; one threshold)
     const int threshold_ev = 15000;
     const int number_of_images = 1000;
     const int number_of_triggers = 1; // Each trigger acquires number_of_images frames
@@ -68,6 +83,7 @@ int main(int argc, char *argv[]) {
     // =============================================================================
     // CONNECT TO DETECTOR
     // =============================================================================
+    eiger_set_http_trace(stdout); // log every HTTP method, URL, and PUT body to the DCU
     EigerSession dcu(host, kPort);
 
     char response[EIGER_CLIENT_RESPONSE_MAX];
@@ -118,7 +134,7 @@ int main(int argc, char *argv[]) {
     std::snprintf(buf, sizeof(buf), "%d", number_of_triggers);
     dcu.setDetectorConfig("ntrigger", buf);
 
-    // Useful status readout
+    // After configuration check : high voltage, temperature, humidity
     if (dcu.getStatus("high_voltage/state", response, sizeof(response)) == 0)
         printStatusLine("High voltage status:\t\t", response);
     if (dcu.getStatus("temperature", response, sizeof(response)) == 0) {
@@ -140,7 +156,7 @@ int main(int argc, char *argv[]) {
     std::printf("Frame time= %.9f s\n", exposure_time + sleep_time);
 
     // =============================================================================
-    // DATA ACQUISITION INTERFACES
+    // DATA ACQUISITION INTERFACES (stream v2 / CBOR; consumer runs in another process)
     // =============================================================================
     dcu.setMonitorConfig("mode", "disabled");
     dcu.setFilewriterConfig("mode", "\"disabled\"");
@@ -149,14 +165,14 @@ int main(int argc, char *argv[]) {
     dcu.setStreamConfig("header_detail", "\"all\"");
 
     // =============================================================================
-    // RUN ACQUISITION
+    // RUN ACQUISITION (arm before trigger; trigger may run in another process)
     // =============================================================================
     std::printf("Acquiring data...\n");
     if (dcu.sendCommand("arm") != 0) {
         std::fprintf(stderr, "arm failed\n");
         return 1;
     }
-    // Software triggers; comment out if using external trigger
+    // Software trigger from this process; skip loop if another process sends trigger
     for (int i = 0; i < number_of_triggers; i++) {
         std::printf("Triggering image %d/%d...\n", i + 1, number_of_triggers);
         if (dcu.sendCommand("trigger") != 0) {
@@ -164,6 +180,17 @@ int main(int argc, char *argv[]) {
             dcu.sendCommand("disarm");
             return 1;
         }
+    }
+    // Disarm only after acquisition has finished (state returns to idle), like the Python demo.
+    for (;;) {
+        if (dcu.getStatus("state", response, sizeof(response)) != 0) {
+            std::fprintf(stderr, "Failed to read state while waiting for idle\n");
+            dcu.sendCommand("disarm");
+            return 1;
+        }
+        if (stateIsIdle(response))
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     if (dcu.sendCommand("disarm") != 0)
         std::fprintf(stderr, "Warning: disarm failed\n");
