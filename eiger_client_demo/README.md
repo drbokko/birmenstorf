@@ -2,11 +2,11 @@
 
 This directory contains a small **C++** program and a matching **Python** script that configure a **DECTRIS EIGER** detector control unit (**DCU**) and run a short acquisition over **stream v2** (**CBOR**). They use the DCU’s **HTTP REST** surface—the same one described in the **SIMPLON API Reference** from DECTRIS (detector, monitor, filewriter, and stream subsystems, status and config parameters, commands such as `initialize`, `arm`, `trigger`, `disarm`).
 
-**Simplon API rules (summary).** In normal operation you respect the detector **state**: only apply configuration when allowed for that state; use `**initialize`** when the system is not ready; `**arm**` before the detector will accept `**trigger**`; use `**disarm**` to leave the armed path. Subsystems are separate URLs (`/detector/…`, `/stream/…`, etc.); each PUT carries a JSON body with a `**value**` field as in the reference. This demo follows that ordering; for exact preconditions, allowed parameters, and edge cases, use the official **SIMPLON** documentation for your firmware version.
+**Simplon API rules (summary).** In normal operation you respect the detector **state**: only apply configuration when allowed for that state; use `initialize` when the system is not ready; `arm` before the detector will accept `trigger`; use `disarm` to leave the armed path. Subsystems are separate URLs (`/detector/…`, `/stream/…`, etc.); each `PUT` carries a JSON body with a `value` field as in the reference. This demo follows that ordering; for exact preconditions, allowed parameters, and edge cases, use the official **SIMPLON** documentation for your firmware version.
 
-**Detector configuration checklist** used in both scripts: turn **off** count-rate correction, **retrigger**, flat-field correction, and **auto_summation**; set `**counting_mode`** as a **string** (here `**normal`**); turn **on** virtual-pixel correction and **mask_to_zero**; set thresholds and timing; **avoid `photon_energy`** so thresholds are not overwritten; then **monitor** and **filewriter** **off**, **stream** **on** (step 3 and step 5 below spell this out).
+**Detector configuration checklist** used in both scripts: turn **off** `countrate_correction_applied`, `retrigger`, `flatfield_correction_applied`, and `auto_summation`; set `counting_mode` as a **string** (here `normal`); turn **on** `virtual_pixel_correction_applied` and `mask_to_zero`; set thresholds and timing; **do not** set `photon_energy` (it can overwrite threshold-related settings); then set **monitor** and **filewriter** **off** and **stream** **on** (steps 3 and 5 below spell this out).
 
-The program `**simple_acquisition_with_stream2`** does **not** implement a stream **receiver**—only DCU-side stream configuration. Run your consumer in **another process** before arming if you must not miss data.
+The program `simple_acquisition_with_stream2` does **not** implement a stream **receiver**—only DCU-side stream configuration. Run your consumer in **another process** before arming if you must not miss data.
 
 ---
 
@@ -26,17 +26,17 @@ make
 cd python && python3 simple_acquisition_with_stream2.py
 ```
 
-Set `**EIGER_API_VERSION**` if your DCU uses an API segment other than the default **1.8.0**.
+Set `EIGER_API_VERSION` if your DCU uses an API segment other than the default `1.8.0`.
 
 ---
 
 ## Code walkthrough (C++): `cpp/simple_acquisition_with_stream2.cpp`
 
-The rest of this section follows `**main()`** from top to bottom: same order the DCU sees requests.
+The rest of this section follows `main` from top to bottom: same order the DCU sees requests.
 
 ### Helpers (before `main`)
 
-Small utilities parse JSON status snippets returned by the DCU: `**stateIsIdle**` looks for an `"idle"` value, `**jsonValueNumber**` reads a numeric `**value**` for temperature/humidity, `**printStatusLine**` prints raw JSON when needed. They are not extra HTTP calls; they only interpret buffers filled by `**getStatus**`.
+Small utilities parse JSON status snippets returned by the DCU: `stateIsIdle` looks for an `"idle"` value, `jsonValueNumber` reads a numeric `value` for temperature/humidity, `printStatusLine` prints raw JSON when needed. They are not extra HTTP calls; they only interpret buffers filled by `getStatus`.
 
 ```cpp
 bool stateIsIdle(const char *status_json) {
@@ -64,9 +64,9 @@ void printStatusLine(const char *label, const char *json) {
 
 ### 1. User input and connection
 
-**Host and port** come from constants and arguments (`HOST`, optional `**--force-init`**). Acquisition parameters are fixed in code: one threshold, `**number_of_images**`, `**number_of_triggers**`, `**count_time**` / `**frame_time**`.
+**Host and port** come from constants and arguments (`HOST`, optional `--force-init`). Acquisition parameters are fixed in code: one threshold, `number_of_images`, `number_of_triggers`, `count_time` / `frame_time`.
 
-Then the program enables **HTTP tracing** (every method, URL, and PUT body on **stdout**) and constructs `**EigerSession`**, which holds `**host**` / `**port**` and forwards to the C client. Response and scratch buffers are allocated once.
+Then the program enables **HTTP tracing** (every method, URL, and `PUT` body on **stdout**) and constructs `EigerSession`, which holds `host` / `port` and forwards to the C client. Response and scratch buffers are allocated once.
 
 *Excerpt from `cpp/simple_acquisition_with_stream2.cpp` (start of `main`).*
 
@@ -114,7 +114,7 @@ int main(int argc, char *argv[]) {
 
 ### 2. Initialize
 
-First **GET** of detector `**state`**. If the DCU is not **idle**, or `**--force-init`** was passed, the program sends the `**initialize**` command so later configuration runs against a known state (per Simplon state rules).
+First `GET` of detector `state`. If the DCU is not **idle**, or `--force-init` was passed, the program sends the `initialize` command so later configuration runs against a known state (per Simplon state rules).
 
 ```cpp
     // =============================================================================
@@ -138,19 +138,16 @@ First **GET** of detector `**state`**. If the DCU is not **idle**, or `**--force
 
 ### 3. Detector configuration
 
-**PUT** calls set detector **config** parameters. Values are JSON-compatible strings in C++ (booleans and quoted strings).
+`PUT` calls set detector **config** parameters. Values are JSON-compatible strings in C++ (booleans and quoted strings).
 
 **Important — configure the detector like this (same in Python and C++):**
 
 - **Disable** the following: `countrate_correction_applied`, `retrigger`, `flatfield_correction_applied`, `auto_summation` (all off / `false` in this demo).
-- **Enable** the following:`virtual_pixel_correction_applied`, `mask_to_zero`.
-- Only then **Set:** threshold **mode** and **energy**, `**count_time`**, `**frame_time**`, `**nimages**`, `**ntrigger**`.
-- Remember **do not set** `photon_energy` here: on many setups it can **overwrite or conflict with threshold** configuration.
-- **Enable** only the data interfaces you need (see step 5):
-  - monitor **off**
-  - filewriter **off**
-  - stream **on**.
-- **Attention** the `counting_mode` is not a boolean — set the **mode string** your measurement needs; this demo uses `**normal`** (do not read “disable counting_mode” as a boolean flag).
+- **Enable** the following: `virtual_pixel_correction_applied`, `mask_to_zero`.
+- **Then set** threshold **mode** and **energy**, `count_time`, `frame_time`, `nimages`, `ntrigger`.
+- **Do not set** `photon_energy` here: on many setups it can **overwrite or conflict with** threshold configuration.
+- **Data interfaces** (see step 5): monitor **off**, filewriter **off**, stream **on**.
+- `counting_mode` is not a boolean—set the **mode string** your measurement needs; this demo uses `normal` (do not read “disable counting_mode” as a boolean flag).
 
 ```cpp
     // =============================================================================
@@ -193,7 +190,7 @@ First **GET** of detector `**state`**. If the DCU is not **idle**, or `**--force
 
 ### 4. Housekeeping (parameter monitoring)
 
-After configuration, the code **reads** status only: **high voltage**, **temperature**, **humidity**, and prints configured **count** / **frame** time. No further detector **PUT**s here—this is operational readout aligned with Simplon **status** paths.
+After configuration, the code **reads** status only: **high voltage**, **temperature**, **humidity**, and prints configured **count** / **frame** time. No further detector `PUT` requests here—this is operational readout aligned with Simplon **status** paths.
 
 ```cpp
     // After configuration check : high voltage, temperature, humidity
@@ -220,7 +217,7 @@ After configuration, the code **reads** status only: **high voltage**, **tempera
 
 ### 5. Data interfaces (stream configuration)
 
-This matches the **IMPORTANT** checklist: **monitor disabled**, **filewriter disabled**, **stream enabled**. Here the stream uses `**format = cbor`** and `**header_detail = all**` for stream v2–style delivery. This is only the **DCU** side; **receiving** and decoding CBOR frames runs in **another process**.
+This matches the **IMPORTANT** checklist: **monitor disabled**, **filewriter disabled**, **stream enabled**. Here the stream uses `format` `cbor` and `header_detail` `all` for stream v2–style delivery. This is only the **DCU** side; **receiving** and decoding CBOR frames runs in **another process**.
 
 ```cpp
     // =============================================================================
@@ -235,7 +232,7 @@ This matches the **IMPORTANT** checklist: **monitor disabled**, **filewriter dis
 
 ### 6. Arming
 
-`**arm**` transitions the detector into a state where it can accept **software `trigger`** (Simplon command sequence). Failure aborts the program without disarming if arm never succeeded.
+`arm` transitions the detector into a state where it can accept **software** `trigger` (Simplon command sequence). Failure aborts the program without disarming if `arm` never succeeded.
 
 ```cpp
     // =============================================================================
@@ -250,7 +247,7 @@ This matches the **IMPORTANT** checklist: **monitor disabled**, **filewriter dis
 
 ### 7. Triggering
 
-A loop sends `**trigger**` once per `**number_of_triggers**`. Each trigger acquires `**number_of_images**` frames as configured. You may move `**trigger**` to another process if you keep the same **arm** / **disarm** contract. On failure, the code **disarms** and exits.
+A loop sends `trigger` once per `number_of_triggers`. Each trigger acquires `number_of_images` frames as configured. You may move `trigger` to another process if you keep the same `arm` / `disarm` contract. On failure, the code **disarms** and exits.
 
 ```cpp
     // Software trigger from this process; skip loop if another process sends trigger
@@ -266,7 +263,7 @@ A loop sends `**trigger**` once per `**number_of_triggers**`. Each trigger acqui
 
 ### 8. Wait for idle, then disarm
 
-The program polls `**state**` until it is **idle** again (acquisition finished), then `**disarm`**. Polling uses a **100 ms** sleep between **GET**s. `**disarm`** failure is reported but does not change the exit code.
+The program polls `state` until it is **idle** again (acquisition finished), then `disarm`. Polling uses a **100 ms** sleep between repeated `GET` calls. `disarm` failure is reported but does not change the exit code.
 
 ```cpp
     // Disarm only after acquisition has finished (state returns to idle), like the Python demo.
@@ -291,4 +288,4 @@ The program polls `**state**` until it is **idle** again (acquisition finished),
 
 ## Python
 
-`**python/simple_acquisition_with_stream2.py**` performs the **same steps in the same order** as the C++program, including the **CONFIGURATION (IMPORTANT)** comment block (disable/enable list, **no `photon_energy`**, monitor/filewriter off, stream on). Use it when you prefer the `**DEigerClient**` API; behavior matches the C++ flow above.
+`python/simple_acquisition_with_stream2.py` performs the **same steps in the same order** as the C++ program, including the `CONFIGURATION (IMPORTANT)` comment block (disable/enable list, no `photon_energy`, monitor/filewriter off, stream on). Use it when you prefer the `DEigerClient` API; behavior matches the C++ flow above.
