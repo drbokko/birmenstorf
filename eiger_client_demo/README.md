@@ -1,321 +1,270 @@
-# EIGER client demo (`eiger_client_demo`)
+# EIGER client demo
 
-Small examples that talk to a **DECTRIS EIGER** detector control unit (**DCU**) over its **HTTP REST API** (default API segment **1.8.0**). The C++ layer exposes a **C ABI** (`cpp/eiger_client.h`, `cpp/eiger_client.cpp`); the Python side uses **`DEigerClient`** (`python/DEigerClient/`).
+This directory contains a small **C++** program and a matching **Python** script that configure a **DECTRIS EIGER** detector control unit (**DCU**) and run a short acquisition over **stream v2** (**CBOR**). They use the DCU’s **HTTP REST** surface—the same one described in the **SIMPLON API Reference** from DECTRIS (detector, monitor, filewriter, and stream subsystems, status and config parameters, commands such as `initialize`, `arm`, `trigger`, `disarm`).
 
-The main walkthrough below follows **`simple_acquisition_with_stream2`**: one **software-triggered** batch (**1000** frames in the default settings), **one** energy threshold, **stream v2** with **CBOR**, monitor and filewriter off. **Receiving** the stream is **not** implemented in these scripts—start your stream consumer in another process before arming if you need every frame.
+**Simplon API rules (summary).** In normal operation you respect the detector **state**: only apply configuration when allowed for that state; use **`initialize`** when the system is not ready; **`arm`** before the detector will accept **`trigger`**; use **`disarm`** to leave the armed path. Subsystems are separate URLs (`/detector/…`, `/stream/…`, etc.); each PUT carries a JSON body with a **`value`** field as in the reference. This demo follows that ordering; for exact preconditions, allowed parameters, and edge cases, use the official **SIMPLON** documentation for your firmware version.
 
-**Disclaimer:** this is a **single-trigger** demo (`ntrigger = 1`, `nimages` frames per trigger). For continuous acquisition, increase **`ntrigger`** (and align detector settings). The **`trigger`** command can be sent from **another process** if you coordinate **arm** / **disarm** and timing.
-
----
-
-## Repository layout
-
-| Path | Role |
-|------|------|
-| `cpp/eiger_client.h`, `cpp/eiger_client.cpp` | C API: GET status, PUT commands, PUT detector/stream/monitor/filewriter config |
-| `cpp/eiger_session.hpp` | Thin C++ wrapper holding host/port |
-| `cpp/simple_acquisition_with_stream2.cpp` | End-to-end demo (builds to `simple_acquisition_with_stream2`) |
-| `python/DEigerClient/DEigerClient.py` | Python client for the same REST surface |
-| `python/simple_acquisition_with_stream2.py` | Same demo as the C++ binary |
-| `Makefile` | Builds the C++ demo on Linux (needs **libcurl** via `pkg-config`) |
+The program **`simple_acquisition_with_stream2`** does **not** implement a stream **receiver**—only DCU-side stream configuration. Run your consumer in **another process** before arming if you must not miss data.
 
 ---
 
 ## Build and run
 
-**C++** (from this directory):
+**C++** (needs **libcurl** on Linux, see `pkg-config libcurl`):
 
 ```bash
 make
 ./simple_acquisition_with_stream2 [HOST]
-# optional: ./simple_acquisition_with_stream2 --force-init 169.254.254.1
+# ./simple_acquisition_with_stream2 --force-init 169.254.254.1
 ```
 
-**Python**:
+**Python:**
 
 ```bash
-cd python
-python3 simple_acquisition_with_stream2.py
+cd python && python3 simple_acquisition_with_stream2.py
 ```
 
-Edit **`DCU_IP`** / **`DCU_PORT`** in the Python script, or pass **`HOST`** to the C++ binary (default `169.254.254.1`). With **`verbose=True`** (Python) and **`eiger_set_http_trace(stdout)`** (C++), each request to the DCU is printed (**method**, **URL**, **PUT body**).
-
-Override the API version if needed: environment variable **`EIGER_API_VERSION`** (e.g. `1.6.0`).
+Set **`EIGER_API_VERSION`** if your DCU uses an API segment other than the default **1.8.0**.
 
 ---
 
-## Step-by-step: `simple_acquisition_with_stream2`
+## Code walkthrough (C++): `cpp/simple_acquisition_with_stream2.cpp`
 
-The DCU expects a clear order: **configure** while safe, then **arm**, then **trigger**; **disarm** after the run. The tables below show the same step in **Python** and **C++** side by side.
+The rest of this section follows **`main()`** from top to bottom: same order the DCU sees requests.
 
-### 1. Connect to the DCU
+### Helpers (before `main`)
 
-Create the client and buffers. Enable logging so every HTTP call to the DCU is visible on the console.
+Small utilities parse JSON status snippets returned by the DCU: **`stateIsIdle`** looks for an `"idle"` value, **`jsonValueNumber`** reads a numeric **`value`** for temperature/humidity, **`printStatusLine`** prints raw JSON when needed. They are not extra HTTP calls; they only interpret buffers filled by **`getStatus`**.
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>c = DEigerClient.DEigerClient(host=DCU_IP, port=DCU_PORT, verbose=True)</code></pre></td>
-<td><pre lang="cpp"><code>eiger_set_http_trace(stdout); // log HTTP method, URL, PUT body
-EigerSession dcu(host, kPort);
-
-char response[EIGER_CLIENT_RESPONSE_MAX];
-char buf[64];</code></pre></td>
-</tr>
-</table>
-
-### 2. Initialize when the detector is not idle
-
-The DCU must be in a known state before applying configuration. Both scripts read **`state`**; if it is not **`idle`** (or you force initialization), they send the **`initialize`** command.
-
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>print(f"Detector status:\t\t\t{c.detectorStatus('state')['value']}")
-# Initialize if forced or not idle
-if force_initialization or c.detectorStatus('state')['value'] != 'idle':
-    print("Initializing detector...")
-    c.sendDetectorCommand("initialize")</code></pre></td>
-<td><pre lang="cpp"><code>if (dcu.getStatus("state", response, sizeof(response)) != 0) {
-    std::fprintf(stderr, "Failed to read detector state (host %s:%d)\n", dcu.host(), dcu.port());
-    return 1;
+```cpp
+bool stateIsIdle(const char *status_json) {
+    return status_json && std::strstr(status_json, "\"idle\"") != nullptr;
 }
-std::printf("Detector status:\t\t\t%s\n", response);
 
-// Initialize if forced or not idle
-if (force_initialization || !stateIsIdle(response)) {
-    std::printf("Initializing detector...\n");
-    if (dcu.sendCommand("initialize") != 0) {
-        std::fprintf(stderr, "initialize failed\n");
+int jsonValueNumber(const char *json, double *out) {
+    const char *p = std::strstr(json, "\"value\"");
+    if (!p)
+        return -1;
+    p = std::strchr(p, ':');
+    if (!p)
+        return -1;
+    ++p;
+    while (*p == ' ' || *p == '\t')
+        ++p;
+    return std::sscanf(p, "%lf", out) == 1 ? 0 : -1;
+}
+
+void printStatusLine(const char *label, const char *json) {
+    if (json && json[0])
+        std::printf("%s%s\n", label, json);
+}
+```
+
+### 1. User input and connection
+
+**Host and port** come from constants and arguments (`HOST`, optional **`--force-init`**). Acquisition parameters are fixed in code: one threshold, **`number_of_images`**, **`number_of_triggers`**, **`count_time`** / **`frame_time`**.
+
+Then the program enables **HTTP tracing** (every method, URL, and PUT body on **stdout**) and constructs **`EigerSession`**, which holds **`host`** / **`port`** and forwards to the C client. Response and scratch buffers are allocated once.
+
+*Excerpt from `cpp/simple_acquisition_with_stream2.cpp` (start of `main`).*
+
+```cpp
+int main(int argc, char *argv[]) {
+    // =============================================================================
+    // USER INPUT
+    // =============================================================================
+    const char *const kDefaultHost = "169.254.254.1";
+    const char *host = kDefaultHost;
+    int force_initialization = 0; // Set via --force-init (always call initialize)
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--force-init") == 0) {
+            force_initialization = 1;
+        } else if (std::strcmp(argv[i], "--help") == 0) {
+            std::printf("Usage: %s [--force-init] [HOST]\n"
+                        "  HOST  DCU hostname or IP (default %s)\n"
+                        "  --force-init  Call initialize even when state is idle\n",
+                        argv[0], kDefaultHost);
+            return 0;
+        } else if (argv[i][0] == '-') {
+            std::fprintf(stderr, "Unknown option: %s (try --help)\n", argv[i]);
+            return 1;
+        } else {
+            host = argv[i];
+        }
+    }
+    const int kPort = 80;
+    // Data acquisition (software trigger; ntrigger=1 → one batch of nimages frames; one threshold)
+    const int threshold_ev = 15000;
+    const int number_of_images = 1000;
+    const int number_of_triggers = 1; // Each trigger acquires number_of_images frames
+    const double exposure_time = 1.0 / 1000.0; // Count time per image [s] (e.g. 1/fps)
+    const double sleep_time = 0.0; // Extra delay per frame [s]; frame_time = exposure + sleep
+
+    // =============================================================================
+    // CONNECT TO DETECTOR
+    // =============================================================================
+    eiger_set_http_trace(stdout); // log every HTTP method, URL, and PUT body to the DCU
+    EigerSession dcu(host, kPort);
+
+    char response[EIGER_CLIENT_RESPONSE_MAX];
+    char buf[64];
+```
+
+### 2. Initialize
+
+First **GET** of detector **`state`**. If the DCU is not **idle**, or **`--force-init`** was passed, the program sends the **`initialize`** command so later configuration runs against a known state (per Simplon state rules).
+
+```cpp
+    // =============================================================================
+    // INITIALIZE
+    // =============================================================================
+    if (dcu.getStatus("state", response, sizeof(response)) != 0) {
+        std::fprintf(stderr, "Failed to read detector state (host %s:%d)\n", dcu.host(), dcu.port());
         return 1;
     }
-}</code></pre></td>
-</tr>
-</table>
+    std::printf("Detector status:\t\t\t%s\n", response);
+
+    // Initialize if forced or not idle
+    if (force_initialization || !stateIsIdle(response)) {
+        std::printf("Initializing detector...\n");
+        if (dcu.sendCommand("initialize") != 0) {
+            std::fprintf(stderr, "initialize failed\n");
+            return 1;
+        }
+    }
+```
 
 ### 3. Detector configuration
 
-**Detector configuration** sets counting mode, corrections, **one** active threshold (second disabled), and acquisition timing: **`count_time`**, **`frame_time`**, **`nimages`**, **`ntrigger`**. Python passes native values; the C API expects JSON-shaped strings for each **`value`** (e.g. booleans as `false`/`true`, strings quoted).
+**PUT** calls set detector **config** parameters: counting mode, corrections, **one** enabled threshold (second disabled), then **`count_time`**, **`frame_time`**, **`nimages`**, **`ntrigger`**. Values are passed as JSON-compatible strings where the C API expects them (booleans and quoted strings).
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code># Usual settings for polychromatic beam
-c.setDetectorConfig("countrate_correction_applied", False)
-c.setDetectorConfig('retrigger', False)
-c.setDetectorConfig('counting_mode', 'normal')
-c.setDetectorConfig("flatfield_correction_applied", False)
-c.setDetectorConfig('virtual_pixel_correction_applied', True)
-c.setDetectorConfig('mask_to_zero', True)
-c.setDetectorConfig('auto_summation', False)
+```cpp
+    // =============================================================================
+    // CONFIGURATION
+    // =============================================================================
+    // Usual settings for polychromatic beam
+    dcu.setDetectorConfig("countrate_correction_applied", "false");
+    dcu.setDetectorConfig("retrigger", "false");
+    dcu.setDetectorConfig("counting_mode", "\"normal\"");
+    dcu.setDetectorConfig("flatfield_correction_applied", "false");
+    dcu.setDetectorConfig("virtual_pixel_correction_applied", "true");
+    dcu.setDetectorConfig("mask_to_zero", "true");
+    dcu.setDetectorConfig("auto_summation", "false");
 
-# Thresholds and timing
-for i, th in enumerate(thresholds, start=1):
-    c.setDetectorConfig(f"threshold/{i}/mode", 'enabled')
-    c.setDetectorConfig(f"threshold/{i}/energy", th)
-if len(thresholds) &lt; 2:
-    c.setDetectorConfig("threshold/2/mode", 'disabled')
-c.setDetectorConfig("count_time", exposure_time)
-c.setDetectorConfig('frame_time', exposure_time + sleep_time)
-c.setDetectorConfig("nimages", number_of_images)
-c.setDetectorConfig("ntrigger", number_of_triggers)</code></pre></td>
-<td><pre lang="cpp"><code>// Usual settings for polychromatic beam
-dcu.setDetectorConfig("countrate_correction_applied", "false");
-dcu.setDetectorConfig("retrigger", "false");
-dcu.setDetectorConfig("counting_mode", "\"normal\"");
-dcu.setDetectorConfig("flatfield_correction_applied", "false");
-dcu.setDetectorConfig("virtual_pixel_correction_applied", "true");
-dcu.setDetectorConfig("mask_to_zero", "true");
-dcu.setDetectorConfig("auto_summation", "false");
+    // Thresholds and timing
+    dcu.setDetectorConfig("threshold/1/mode", "\"enabled\"");
+    std::snprintf(buf, sizeof(buf), "%d", threshold_ev);
+    dcu.setDetectorConfig("threshold/1/energy", buf);
+    dcu.setDetectorConfig("threshold/2/mode", "\"disabled\"");
 
-// Thresholds and timing
-dcu.setDetectorConfig("threshold/1/mode", "\"enabled\"");
-std::snprintf(buf, sizeof(buf), "%d", threshold_ev);
-dcu.setDetectorConfig("threshold/1/energy", buf);
-dcu.setDetectorConfig("threshold/2/mode", "\"disabled\"");
-
-std::snprintf(buf, sizeof(buf), "%.9f", exposure_time);
-dcu.setDetectorConfig("count_time", buf);
-std::snprintf(buf, sizeof(buf), "%.9f", exposure_time + sleep_time);
-dcu.setDetectorConfig("frame_time", buf);
-std::snprintf(buf, sizeof(buf), "%d", number_of_images);
-dcu.setDetectorConfig("nimages", buf);
-std::snprintf(buf, sizeof(buf), "%d", number_of_triggers);
-dcu.setDetectorConfig("ntrigger", buf);</code></pre></td>
-</tr>
-</table>
+    std::snprintf(buf, sizeof(buf), "%.9f", exposure_time);
+    dcu.setDetectorConfig("count_time", buf);
+    std::snprintf(buf, sizeof(buf), "%.9f", exposure_time + sleep_time);
+    dcu.setDetectorConfig("frame_time", buf);
+    std::snprintf(buf, sizeof(buf), "%d", number_of_images);
+    dcu.setDetectorConfig("nimages", buf);
+    std::snprintf(buf, sizeof(buf), "%d", number_of_triggers);
+    dcu.setDetectorConfig("ntrigger", buf);
+```
 
 ### 4. Housekeeping (parameter monitoring)
 
-After configuration, both scripts **read** status endpoints useful for operations: **high voltage**, **temperature**, **humidity**, and they confirm **count** / **frame** time. This is **monitoring** only—no new settings.
+After configuration, the code **reads** status only: **high voltage**, **temperature**, **humidity**, and prints configured **count** / **frame** time. No further detector **PUT**s here—this is operational readout aligned with Simplon **status** paths.
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>print(f"High voltage status:\t\t{c.detectorStatus('high_voltage/state')['value']}")
-print(f"Temperature:\t\t\t{c.detectorStatus('temperature')['value']:.1f} deg")
-print(f"Humidity:\t\t\t{c.detectorStatus('humidity')['value']:.1f} %")
-print(f'Count time= {c.detectorConfig("count_time")["value"]}')
-print(f'Frame time= {c.detectorConfig("frame_time")["value"]}')</code></pre></td>
-<td><pre lang="cpp"><code>// After configuration check : high voltage, temperature, humidity
-if (dcu.getStatus("high_voltage/state", response, sizeof(response)) == 0)
-    printStatusLine("High voltage status:\t\t", response);
-if (dcu.getStatus("temperature", response, sizeof(response)) == 0) {
-    double t = 0.0;
-    if (jsonValueNumber(response, &amp;t) == 0)
-        std::printf("Temperature:\t\t\t%.1f deg\n", t);
-    else
-        printStatusLine("Temperature:\t\t\t", response);
-}
-if (dcu.getStatus("humidity", response, sizeof(response)) == 0) {
-    double h = 0.0;
-    if (jsonValueNumber(response, &amp;h) == 0)
-        std::printf("Humidity:\t\t\t%.1f %%\n", h);
-    else
-        printStatusLine("Humidity:\t\t\t", response);
-}
+```cpp
+    // After configuration check : high voltage, temperature, humidity
+    if (dcu.getStatus("high_voltage/state", response, sizeof(response)) == 0)
+        printStatusLine("High voltage status:\t\t", response);
+    if (dcu.getStatus("temperature", response, sizeof(response)) == 0) {
+        double t = 0.0;
+        if (jsonValueNumber(response, &t) == 0)
+            std::printf("Temperature:\t\t\t%.1f deg\n", t);
+        else
+            printStatusLine("Temperature:\t\t\t", response);
+    }
+    if (dcu.getStatus("humidity", response, sizeof(response)) == 0) {
+        double h = 0.0;
+        if (jsonValueNumber(response, &h) == 0)
+            std::printf("Humidity:\t\t\t%.1f %%\n", h);
+        else
+            printStatusLine("Humidity:\t\t\t", response);
+    }
 
-std::printf("Count time= %.9f s\n", exposure_time);
-std::printf("Frame time= %.9f s\n", exposure_time + sleep_time);</code></pre></td>
-</tr>
-</table>
+    std::printf("Count time= %.9f s\n", exposure_time);
+    std::printf("Frame time= %.9f s\n", exposure_time + sleep_time);
+```
 
-### 5. Data path configuration (stream consumer)
+### 5. Data interfaces (stream configuration)
 
-**Monitor** and **filewriter** are turned **off**; **stream** is **enabled** with **`format = cbor`** and full **`header_detail`**. This configures what the DCU **sends** on the stream v2 interface. Your **data consumer** (another process or tool) must connect to that stream and decode **CBOR**; it is **not** part of these scripts.
+**Monitor** and **filewriter** are disabled; **stream** is enabled with **`format = cbor`** and **`header_detail = all`**. This is the DCU side of **stream v2** delivery. **Receiving** and decoding CBOR frames is **out of scope** for this file and must run elsewhere.
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>c.setMonitorConfig("mode", "disabled")
-c.setFileWriterConfig('mode', "disabled")
-c.setStreamConfig('mode', "enabled")
-c.setStreamConfig('format', 'cbor')
-c.setStreamConfig('header_detail', 'all')</code></pre></td>
-<td><pre lang="cpp"><code>dcu.setMonitorConfig("mode", "disabled");
-dcu.setFilewriterConfig("mode", "\"disabled\"");
-dcu.setStreamConfig("mode", "\"enabled\"");
-dcu.setStreamConfig("format", "\"cbor\"");
-dcu.setStreamConfig("header_detail", "\"all\"");</code></pre></td>
-</tr>
-</table>
+```cpp
+    // =============================================================================
+    // DATA ACQUISITION INTERFACES (stream v2 / CBOR; consumer runs in another process)
+    // =============================================================================
+    dcu.setMonitorConfig("mode", "disabled");
+    dcu.setFilewriterConfig("mode", "\"disabled\"");
+    dcu.setStreamConfig("mode", "\"enabled\"");
+    dcu.setStreamConfig("format", "\"cbor\"");
+    dcu.setStreamConfig("header_detail", "\"all\"");
+```
 
 ### 6. Arming
 
-**Arm** puts the detector into a state where it can accept **trigger**. Until **`arm`** succeeds, **`trigger`** must not be relied on.
+**`arm`** transitions the detector into a state where it can accept **software `trigger`** (Simplon command sequence). Failure aborts the program without disarming if arm never succeeded.
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>print("Acquiring data...")
-c.sendDetectorCommand('arm')</code></pre></td>
-<td><pre lang="cpp"><code>std::printf("Acquiring data...\n");
-if (dcu.sendCommand("arm") != 0) {
-    std::fprintf(stderr, "arm failed\n");
-    return 1;
-}</code></pre></td>
-</tr>
-</table>
+```cpp
+    // =============================================================================
+    // RUN ACQUISITION (arm before trigger; trigger may run in another process)
+    // =============================================================================
+    std::printf("Acquiring data...\n");
+    if (dcu.sendCommand("arm") != 0) {
+        std::fprintf(stderr, "arm failed\n");
+        return 1;
+    }
+```
 
 ### 7. Triggering
 
-**Software trigger**: each **`trigger`** command starts acquisition according to **`nimages`** / **`ntrigger`**. You can **omit** this loop and send **`trigger`** from **another program** if the sequence is coordinated. On **`trigger`** failure, the C++ demo **disarms** and exits.
+A loop sends **`trigger`** once per **`number_of_triggers`**. Each trigger acquires **`number_of_images`** frames as configured. You may move **`trigger`** to another process if you keep the same **arm** / **disarm** contract. On failure, the code **disarms** and exits.
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>for i in range(number_of_triggers):
-    print(f"Triggering image {i+1}/{number_of_triggers}...")
-    c.sendDetectorCommand('trigger')</code></pre></td>
-<td><pre lang="cpp"><code>for (int i = 0; i &lt; number_of_triggers; i++) {
-    std::printf("Triggering image %d/%d...\n", i + 1, number_of_triggers);
-    if (dcu.sendCommand("trigger") != 0) {
-        std::fprintf(stderr, "trigger failed\n");
-        dcu.sendCommand("disarm");
-        return 1;
+```cpp
+    // Software trigger from this process; skip loop if another process sends trigger
+    for (int i = 0; i < number_of_triggers; i++) {
+        std::printf("Triggering image %d/%d...\n", i + 1, number_of_triggers);
+        if (dcu.sendCommand("trigger") != 0) {
+            std::fprintf(stderr, "trigger failed\n");
+            dcu.sendCommand("disarm");
+            return 1;
+        }
     }
-}</code></pre></td>
-</tr>
-</table>
+```
 
 ### 8. Wait for idle, then disarm
 
-Wait until **`state`** returns to **`idle`** so the acquisition is finished, then **disarm** to leave the detector in a clean state. The C++ code polls every **100 ms**; Python uses the same interval.
+The program polls **`state`** until it is **idle** again (acquisition finished), then **`disarm`**. Polling uses a **100 ms** sleep between **GET**s. **`disarm`** failure is reported but does not change the exit code.
 
-<table width="100%">
-<tr>
-<th align="left" width="50%">Python — <code>python/simple_acquisition_with_stream2.py</code></th>
-<th align="left" width="50%">C++ — <code>cpp/simple_acquisition_with_stream2.cpp</code></th>
-</tr>
-<tr valign="top">
-<td><pre lang="python"><code>while c.detectorStatus('state')['value'] != 'idle':
-    time.sleep(0.1)
-c.sendDetectorCommand("disarm")</code></pre></td>
-<td><pre lang="cpp"><code>for (;;) {
-    if (dcu.getStatus("state", response, sizeof(response)) != 0) {
-        std::fprintf(stderr, "Failed to read state while waiting for idle\n");
-        dcu.sendCommand("disarm");
-        return 1;
+```cpp
+    // Disarm only after acquisition has finished (state returns to idle), like the Python demo.
+    for (;;) {
+        if (dcu.getStatus("state", response, sizeof(response)) != 0) {
+            std::fprintf(stderr, "Failed to read state while waiting for idle\n");
+            dcu.sendCommand("disarm");
+            return 1;
+        }
+        if (stateIsIdle(response))
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    if (stateIsIdle(response))
-        break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (dcu.sendCommand("disarm") != 0)
+        std::fprintf(stderr, "Warning: disarm failed\n");
+
+    return 0;
 }
-if (dcu.sendCommand("disarm") != 0)
-    std::fprintf(stderr, "Warning: disarm failed\n");</code></pre></td>
-</tr>
-</table>
+```
 
 ---
 
-## C API reference (summary)
+## Python
 
-| Operation | C function | Typical use |
-|-----------|------------|-------------|
-| Read status | `eiger_get_status(host, port, path, buf, size)` | `state`, `temperature`, `humidity`, `high_voltage/state` |
-| Command | `eiger_send_command(host, port, name)` | `initialize`, `arm`, `trigger`, `disarm` |
-| Detector config | `eiger_set_detector_config(host, port, param, value_json)` | PUT `{"value": ...}` |
-| Stream / monitor / filewriter | `eiger_set_stream_config`, `eiger_set_monitor_config`, `eiger_set_filewriter_config` | Enable stream, CBOR, etc. |
-
-Failed HTTP requests are reported on **stderr**. On **Windows**, the implementation uses **WinHTTP**; on **Linux** with **libcurl**, request tracing is enabled with **`eiger_set_http_trace(FILE *fp)`** (`NULL` to disable).
-
-### Minimal C example
-
-```c
-#include "eiger_client.h"
-
-char response[EIGER_CLIENT_RESPONSE_MAX];
-const char *host = "172.31.1.1";
-int port = 80;
-
-eiger_get_status(host, port, "state", response, sizeof(response));
-eiger_set_detector_config(host, port, "counting_mode", "\"normal\"");
-eiger_set_stream_config(host, port, "mode", "\"enabled\"");
-eiger_send_command(host, port, "arm");
-eiger_send_command(host, port, "trigger");
-/* Wait until GET status/state reports idle, then: */
-eiger_send_command(host, port, "disarm");
-```
-
-For the full sequence (including **wait for idle** before **disarm**), see **`cpp/simple_acquisition_with_stream2.cpp`** and **`python/simple_acquisition_with_stream2.py`**.
+**`python/simple_acquisition_with_stream2.py`** performs the **same steps in the same order**: connect (`DEigerClient` with **`verbose=True`**), **initialize** if not idle, detector **configuration**, housekeeping **GET**s, **monitor** / **filewriter** / **stream** **PUT**s, **arm**, **trigger** loop, wait until **idle**, **disarm**. Use it when you prefer the **`DEigerClient`** API; behavior matches the C++ flow above.

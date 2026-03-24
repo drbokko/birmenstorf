@@ -29,7 +29,7 @@ if __name__ == '__main__':
     # USER INPUT
     # =============================================================================
     # Detector IP and port (DCU = detector control unit). Typical link-local: 169.254.254.1 /24
-    DCU_IP = 'dev-si-e2dcu-06.dectris.local'
+    DCU_IP = '169.254.254.1'
     DCU_PORT = 80
     force_initialization = False  # Force initialization even when already idle
     # Data acquisition (software trigger: trigger command from host; ntrigger=1 → one batch)
