@@ -97,7 +97,7 @@ Initialize submodules, then configure (system libzmq or bundled build):
 ```sh
 git submodule update --init --recursive
 mkdir build && cd build
-cmake /path/to/documentation/stream_v2/examples -DCMAKE_BUILD_TYPE=Debug -DBUILD_LIBZMQ=YES
+cmake /path/to/birmenstorf/dectris_data_consumer -DCMAKE_BUILD_TYPE=Debug -DBUILD_LIBZMQ=YES
 cmake --build .
 ./stream2_dump YOUR_DCU_HOST
 ```
@@ -109,7 +109,7 @@ Set **`BUILD_LIBZMQ=YES`** to fetch and build ZeroMQ from source; otherwise CMak
 Open a **Visual Studio** developer shell (adjust the path to match your install), then:
 
 ```powershell
-cd documentation\stream_v2\examples
+cd dectris_data_consumer
 cmake . -DCMAKE_BUILD_TYPE=Debug -DBUILD_LIBZMQ=YES
 cmake --build .
 ```

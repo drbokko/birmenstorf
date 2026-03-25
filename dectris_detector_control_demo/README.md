@@ -3,7 +3,7 @@
 This repo is built around a **producer / consumer** split:
 
 - **Producer (these C++ tools + DCU)** — Configure the EIGER **DCU** so it **pushes** detector data over **stream v2** (**CBOR**). The three binaries only drive the REST **Simplon** API on the DCU. They do **not** receive or save frames.
-- **Consumer (your responsibility)** — A **separate program** (or another machine) that connects to the detector’s stream endpoint, decodes **CBOR**, and stores or processes images. Start the consumer **before** you care about not losing data (typically before **`arm`**, or at least before you run the **trigger** script).
+- **Consumer (your responsibility)** — A **separate program** (or another machine) that connects to the detector’s stream endpoint, decodes **CBOR**, and stores or processes images. This repository includes a CMake-based receiver under **`dectris_data_consumer/`** (build `DectrisStream2Receiver_linux` and similar targets; see its `README.md`). Start the consumer **before** you care about not losing data (typically before **`arm`**, or at least before you run the **trigger** script).
 
 The **Python** script is an optional **all-in-one** demo for the same REST sequence; it still does not implement a stream consumer.
 
@@ -35,6 +35,7 @@ Edit **`number_of_images`** and **`number_of_triggers`** in `connect_and_configu
 | `cpp/software_trigger_detector.cpp` | Producer **manual fire**: **`trigger`** × **N** |
 | `cpp/wait_idle_and_disarm_detector.cpp` | Producer **teardown**: wait **idle**, **`disarm`** |
 | `python/` | `DEigerClient` + `simple_acquisition_with_stream2.py` (full REST sequence in one process) |
+| `dectris_data_consumer/` | Stream v2 **consumer**: CMake project, ZMQ + CBOR examples (`DectrisStream2Receiver_linux`, etc.) |
 
 ---
 
