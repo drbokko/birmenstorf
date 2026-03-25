@@ -17,7 +17,8 @@ Disclaimer: this sequence is a minimal demo (here, one trigger acquires nimages 
 For continuous acquisition, increase ntrigger (and configure the detector accordingly)
 rather than relying on a single trigger batch.
 
-Mirror of: cpp/simple_acquisition_with_stream2.cpp
+C++ equivalent split across cpp/connect_and_configure_and_arm_detector.cpp,
+cpp/software_trigger_detector.cpp, and cpp/wait_idle_and_disarm_detector.cpp.
 """
 
 import time

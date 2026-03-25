@@ -1,2 +1,5 @@
 simple_acquisition_with_stream2
+connect_and_configure_and_arm_detector
+software_trigger_detector
+wait_idle_and_disarm_detector
 *__pycache__*

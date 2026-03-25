@@ -1,48 +1,41 @@
 /*
- * EIGER demo: 1000 images in one batch over the stream v2 interface (CBOR), with a single
- * software (internal) trigger and one energy threshold.
+ * EIGER demo (part 1): configure the DCU and arm for acquisition. Does not send software trigger.
  *
- * Workflow: connect to the DCU; initialize if state is not idle; configure detector (see
- * CONFIGURATION IMPORTANT: corrections, counting_mode, thresholds, no photon_energy; monitor/
- * filewriter off, stream on); read high voltage state, temperature, and humidity; enable stream
- * (monitor and filewriter off), format CBOR; arm; send trigger(s). The detector must be
- * armed before it accepts trigger.
+ * Then `software_trigger_detector` (same HOST, matching -n), then `wait_idle_and_disarm_detector`.
  *
- * This program does not implement the stream consumer: run a receiver for the detector’s
- * stream v2 endpoint in a separate process. The trigger command may also be issued from
- * another process if you coordinate arm/disarm and timing yourself.
+ * Workflow: connect; initialize; CONFIGURATION (IMPORTANT); housekeeping; stream/monitor/filewriter; arm.
+ * Parts 2–3: software_trigger_detector, then wait_idle_and_disarm_detector. Stream consumer is separate.
  *
- * Disclaimer: minimal demo (here, one trigger acquires nimages frames). For continuous
- * acquisition, increase ntrigger and configure the detector accordingly.
- *
- * Mirror of: python/simple_acquisition_with_stream2.py
+ * Disclaimer: ntrigger / nimages must match software_trigger_detector -n and your measurement.
  */
 
-#include "eiger_session.hpp" // pulls in eiger_client.h for eiger_set_http_trace
-#include <chrono>
+#include "eiger_session.hpp"
 #include <cstdio>
 #include <cstring>
-#include <thread>
 
 namespace {
 
-    bool stateIsIdle(const char *status_json) {
-        return status_json && std::strstr(status_json, "\"idle\"") != nullptr;
-    }
+bool stateIsIdle(const char *status_json) {
+    return status_json && std::strstr(status_json, "\"idle\"") != nullptr;
+}
 
-    int jsonValueNumber(const char *json, double *out) {
-        const char *p = std::strstr(json, "\"value\"");
-        if (!p)
-            return -1;
-        p = std::strchr(p, ':');
-        if (!p)
-            return -1;
+int jsonValueNumber(const char *json, double *out) {
+    const char *p = std::strstr(json, "\"value\"");
+    if (!p)
+        return -1;
+    p = std::strchr(p, ':');
+    if (!p)
+        return -1;
+    ++p;
+    while (*p == ' ' || *p == '\t')
         ++p;
-        while (*p == ' ' || *p == '\t')
-            ++p;
-        return std::sscanf(p, "%lf", out) == 1 ? 0 : -1;
-    }
+    return std::sscanf(p, "%lf", out) == 1 ? 0 : -1;
+}
 
+void printStatusLine(const char *label, const char *json) {
+    if (json && json[0])
+        std::printf("%s%s\n", label, json);
+}
 
 } // namespace
 
@@ -58,9 +51,9 @@ int main(int argc, char *argv[]) {
             force_initialization = 1;
         } else if (std::strcmp(argv[i], "--help") == 0) {
             std::printf("Usage: %s [--force-init] [HOST]\n"
-                        "  HOST  DCU hostname or IP (default %s)\n"
-                        "  --force-init  Call initialize even when state is idle\n",
-                        argv[0], kDefaultHost);
+                        "  Configure detector, stream (CBOR), then arm. No trigger.\n"
+                        "  Then: software_trigger_detector [-n N] [HOST], then wait_idle_and_disarm_detector [HOST].\n",
+                        argv[0]);
             return 0;
         } else if (argv[i][0] == '-') {
             std::fprintf(stderr, "Unknown option: %s (try --help)\n", argv[i]);
@@ -70,17 +63,16 @@ int main(int argc, char *argv[]) {
         }
     }
     const int kPort = 80;
-    // Data acquisition (software trigger; ntrigger=1 → one batch of nimages frames; one threshold)
     const int threshold_ev = 15000;
     const int number_of_images = 1000;
-    const int number_of_triggers = 1; // Each trigger acquires number_of_images frames
+    const int number_of_triggers = 100000; // Acquisition sequence can be stopped any time with the "disarm" command
     const double exposure_time = 1.0 / 1000.0; // Count time per image [s] (e.g. 1/fps)
     const double sleep_time = 0.0; // Extra delay per frame [s]; frame_time = exposure + sleep
 
     // =============================================================================
     // CONNECT TO DETECTOR
     // =============================================================================
-    eiger_set_http_trace(stdout); // log every HTTP method, URL, and PUT body to the DCU
+    eiger_set_http_trace(stdout); // [SIMPLON API] -> request trace: method, URL, PUT body
     EigerSession dcu(host, kPort);
 
     char response[EIGER_CLIENT_RESPONSE_MAX];
@@ -131,31 +123,32 @@ int main(int argc, char *argv[]) {
     dcu.setDetectorConfig("threshold/2/mode", "disabled");
 
     dcu.setDetectorConfig("count_time", exposure_time);
-    // std::printf("[SIMPLON API] -> %.9f s\n", exposure_time);
-
     dcu.setDetectorConfig("frame_time", exposure_time + sleep_time);
-    // std::printf("[SIMPLON API] -> %.9f s\n", exposure_time + sleep_time);
-
     dcu.setDetectorConfig("nimages", number_of_images);
     dcu.setDetectorConfig("ntrigger", number_of_triggers);
 
+    std::printf("[SIMPLON API] -> count_time= %.9f s (configured)\n", exposure_time);
+    std::printf("[SIMPLON API] -> frame_time= %.9f s (configured)\n", exposure_time + sleep_time);
+
+    // =============================================================================
     // After configuration check : high voltage, temperature, humidity
+    // =============================================================================
     if (dcu.getStatus("high_voltage/state", response, sizeof(response)) == 0)
-         std::printf("[SIMPLON API] <- %s", response);
+        std::printf("[SIMPLON API] <- %s", response);
 
     if (dcu.getStatus("temperature", response, sizeof(response)) == 0) {
         double t = 0.0;
         if (jsonValueNumber(response, &t) == 0)
             std::printf("[SIMPLON API] <- %.1f deg\n", t);
         else
-            std::printf("[SIMPLON API] <- %s", response);
+            printStatusLine("[SIMPLON API] <- temperature raw: ", response);
     }
     if (dcu.getStatus("humidity", response, sizeof(response)) == 0) {
         double h = 0.0;
         if (jsonValueNumber(response, &h) == 0)
             std::printf("[SIMPLON API] <- %.1f %%\n", h);
         else
-        std::printf("[SIMPLON API] <- %s:", response);
+            printStatusLine("[SIMPLON API] <- humidity raw: ", response);
     }
 
     // =============================================================================
@@ -168,36 +161,22 @@ int main(int argc, char *argv[]) {
     dcu.setStreamConfig("header_detail", "all");
 
     // =============================================================================
-    // RUN ACQUISITION (arm before trigger; trigger may run in another process)
+    // ARM (software trigger runs in software_trigger_detector)
     // =============================================================================
-    std::printf("Acquiring data...\n");
+    std::printf("Arming detector...\n");
     if (dcu.sendCommand("arm") != 0) {
         std::fprintf(stderr, "arm failed\n");
         return 1;
     }
-    // Software trigger from this process; skip loop if another process sends trigger
-    for (int i = 0; i < number_of_triggers; i++) {
-        std::printf("Triggering image %d/%d...\n", i + 1, number_of_triggers);
-        if (dcu.sendCommand("trigger") != 0) {
-            std::fprintf(stderr, "trigger failed\n");
-            dcu.sendCommand("disarm");
-            return 1;
-        }
-    }
-    // Disarm only after acquisition has finished (state returns to idle), like the Python demo.
-    for (;;) {
-        if (dcu.getStatus("state", response, sizeof(response)) != 0) {
-            std::fprintf(stderr, "Failed to read state while waiting for idle\n");
-            dcu.sendCommand("disarm");
-            return 1;
-        }
-        std::printf("[SIMPLON API] <- %s", response);
-        if (stateIsIdle(response))
-            break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    if (dcu.sendCommand("disarm") != 0)
-        std::fprintf(stderr, "Warning: disarm failed\n");
+
+    std::printf("Armed. Run: software_trigger_detector");
+    if (host != kDefaultHost)
+        std::printf(" %s", host);
+    std::printf(" -n %d", number_of_triggers);
+    std::printf("  then: wait_idle_and_disarm_detector");
+    if (host != kDefaultHost)
+        std::printf(" %s", host);
+    std::printf("\n");
 
     return 0;
 }
