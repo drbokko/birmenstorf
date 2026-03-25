@@ -5,6 +5,7 @@
  * DectrisStream2Receiver_linux. Optional --generate-flatfield writes per-frame TIFFs plus
  * a mean flatfield; --generate-flatfield-only writes only the flatfield. Channel for the
  * mean is auto-selected (image, data, unnamed/empty, or most common non-mask).
+ * Optional --flatfield-file PATH sets the flatfield TIFF path.
  */
 #ifdef __linux__
 #define _GNU_SOURCE
@@ -23,6 +24,7 @@
 #include <inttypes.h>
 #include <errno.h>
 #include <strings.h>
+#include <sys/stat.h>
 
 #ifndef _WIN32
 #include <sys/types.h>
@@ -421,6 +423,44 @@ static int auto_pick_average_channel(struct stream2_buffer_ctx* buf,
     return -1;
 }
 
+/* Create directory path (and parents); ignores EEXIST. Returns 0 on success. */
+static int mkdir_p_inclusive(const char* dir_path) {
+    char tmp[512];
+    size_t len = strlen(dir_path);
+    if (len == 0 || len >= sizeof(tmp))
+        return -1;
+    memcpy(tmp, dir_path, len + 1);
+    while (len > 1 && tmp[len - 1] == '/')
+        tmp[--len] = '\0';
+    for (size_t i = 1; tmp[i]; i++) {
+        if (tmp[i] != '/')
+            continue;
+        tmp[i] = '\0';
+        if (tmp[0] != '\0' && mkdir(tmp, 0755) != 0 && errno != EEXIST)
+            return -1;
+        tmp[i] = '/';
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+        return -1;
+    return 0;
+}
+
+static int ensure_parent_directory_of_file(const char* filepath) {
+    char tmp[512];
+    if (strlen(filepath) >= sizeof(tmp))
+        return -1;
+    strcpy(tmp, filepath);
+    char* slash = strrchr(tmp, '/');
+    if (!slash)
+        return 0;
+    if (slash == tmp)
+        return 0;
+    *slash = '\0';
+    if (tmp[0] == '\0')
+        return 0;
+    return mkdir_p_inclusive(tmp);
+}
+
 static const char* avg_spec_label(const struct avg_channel_spec* spec) {
     static char buf[160];
     if (spec->use_null_or_blank)
@@ -432,6 +472,7 @@ static const char* avg_spec_label(const struct avg_channel_spec* spec) {
 static int write_average_tiff_for_image_channel(struct stream2_buffer_ctx* buf,
                                                 uint64_t series_id,
                                                 const struct avg_channel_spec* spec,
+                                                const char* flatfield_path_override,
                                                 char* flat_path_out,
                                                 size_t flat_path_out_sz) {
     if (flat_path_out && flat_path_out_sz)
@@ -527,24 +568,39 @@ static int write_average_tiff_for_image_channel(struct stream2_buffer_ctx* buf,
     avg.owner = NULL;
     avg.compression_alg = NULL;
 
-    char filename[512];
-    tiff_writer_format_path(filename, sizeof(filename), avg.channel,
-                           avg.image_id, avg.series_id);
+    char default_path[512];
+    const char* write_path;
 
-    int wr = tiff_writer_write(filename, &avg);
+    if (flatfield_path_override && flatfield_path_override[0] != '\0') {
+        if (ensure_parent_directory_of_file(flatfield_path_override) != 0) {
+            fprintf(stderr, "average: could not create parent dirs for %s: %s\n",
+                    flatfield_path_override, strerror(errno));
+            free(avg.channel);
+            free(out_f);
+            free(acc);
+            return -1;
+        }
+        write_path = flatfield_path_override;
+    } else {
+        tiff_writer_format_path(default_path, sizeof(default_path), avg.channel,
+                                avg.image_id, avg.series_id);
+        write_path = default_path;
+    }
+
+    int wr = tiff_writer_write(write_path, &avg);
     free(avg.channel);
     free(out_f);
     free(acc);
     if (wr != 0) {
-        fprintf(stderr, "average: failed to write %s\n", filename);
+        fprintf(stderr, "average: failed to write %s\n", write_path);
         return -1;
     }
     if (flat_path_out && flat_path_out_sz) {
-        strncpy(flat_path_out, filename, flat_path_out_sz - 1);
+        strncpy(flat_path_out, write_path, flat_path_out_sz - 1);
         flat_path_out[flat_path_out_sz - 1] = '\0';
     }
     fprintf(stderr, "wrote average TIFF (%zu frames, channel %s): %s\n",
-            nframes, avg_spec_label(spec), filename);
+            nframes, avg_spec_label(spec), write_path);
     return 0;
 }
 
@@ -614,7 +670,11 @@ static void print_usage(const char* prog) {
             "  --generate-flatfield-only   flatfield only; skip per-frame "
             "TIFFs (mutually exclusive with --generate-flatfield)\n");
     fprintf(stderr,
-            "  --output PATH        TIFF output root (default /dev/shm)\n");
+            "  --flatfield-file PATH   flatfield TIFF path (with "
+            "--generate-flatfield*)\n");
+    fprintf(stderr,
+            "  --output PATH        TIFF output root for per-frame TIFFs "
+            "(default /dev/shm)\n");
 }
 
 static void print_storage_paths(uint64_t series_id,
@@ -641,6 +701,7 @@ int main(int argc, char** argv) {
     uint64_t target_frames = 0;
     int generate_flatfield = 0;
     int generate_flatfield_only = 0;
+    const char* flatfield_file = NULL;
 
     if (argc < 2) {
         print_usage(argv[0]);
@@ -681,6 +742,14 @@ int main(int argc, char** argv) {
             generate_flatfield = 1;
         } else if (strcmp(argv[i], "--generate-flatfield-only") == 0) {
             generate_flatfield_only = 1;
+        } else if (strcmp(argv[i], "--flatfield-file") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr,
+                        "error: --flatfield-file requires a path\n");
+                return EXIT_FAILURE;
+            }
+            flatfield_file = argv[i + 1];
+            i++;
         } else if (strcmp(argv[i], "--output") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: --output requires a path\n");
@@ -709,6 +778,13 @@ int main(int argc, char** argv) {
 
     const int want_flatfield = generate_flatfield || generate_flatfield_only;
     const int save_per_frame = !generate_flatfield_only;
+
+    if (flatfield_file && !want_flatfield) {
+        fprintf(stderr,
+                "error: --flatfield-file requires --generate-flatfield or "
+                "--generate-flatfield-only\n");
+        return EXIT_FAILURE;
+    }
 
     char address[100];
     sprintf(address, "tcp://%s:31001", host);
@@ -828,7 +904,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 int ar = write_average_tiff_for_image_channel(
-                        &buf, series_id, &avg_spec, flat_path,
+                        &buf, series_id, &avg_spec, flatfield_file, flat_path,
                         sizeof(flat_path));
                 if (ar != 0)
                     fprintf(stderr, "warn: flatfield step failed\n");
