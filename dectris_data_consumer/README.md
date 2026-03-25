@@ -1,6 +1,42 @@
-# Stream V2 Examples
+# DECTRIS Stream V2 — `dectris_data_consumer`
 
-C examples and small Python tools for receiving and inspecting DECTRIS Stream V2 data over ZeroMQ.
+C libraries and programs that **consume** DECTRIS Stream **V2** (CBOR over ZeroMQ) and write detector data (e.g. TIFF). They pair with the **producer** side in [`dectris_detector_control`](../dectris_detector_control/) (REST Simplon: configure, arm, trigger, disarm).
+
+## Producer and consumer
+
+The **DCU** is the **producer**: when **armed**, it publishes frames on Stream V2 at `tcp://<dcu>:31001`. Your workstation runs **consumers** that **PULL** that stream, decode CBOR, and save or process images. REST programs such as [`connect_and_configure_and_arm_detector`](../dectris_detector_control/cpp/connect_and_configure_and_arm_detector.cpp) and [`software_trigger_detector`](../dectris_detector_control/cpp/software_trigger_detector.cpp) control acquisition; tools **here**—[`acquire_and_save_stream`](acquire_and_save_stream.c), [`DectrisStream2Receiver_linux`](DectrisStream2Receiver_linux.c), etc.—receive the stream. **Start the stream receiver before frames are emitted** whenever you must not lose data.
+
+## Sample workflow (tools in this repo)
+
+1. **Workstation and DCU** — Power on chiller and detector, confirm cooling, and network connections.
+2. **Configure and arm** — Build and run the producer tool (see [`dectris_detector_control`](../dectris_detector_control/) Makefile):
+
+   ```sh
+   cd ../dectris_detector_control && make
+   ./connect_and_configure_and_arm_detector <dcu_ip_address>
+   ```
+
+   Source: [`connect_and_configure_and_arm_detector.cpp`](../dectris_detector_control/cpp/connect_and_configure_and_arm_detector.cpp). Set **`nimages`** / **`ntrigger`** in that source to match your plan (e.g. **1000** frames per trigger and enough **`ntrigger`** budget for the triggers you will send).
+
+3. **Generate a non-normalized flatfield** — Average **1000** stream frames into one **float32** TIFF (mean in detector units). Configure step 2 for **1000** **`nimages`** per trigger (and enough **`ntrigger`**). On the **receiver**, start the stream consumer **before** you trigger.
+
+   From your **`dectris_data_consumer`** CMake build directory (e.g. `build/`, with `acquire_and_save_stream` on `PATH` or `./bin/acquire_and_save_stream`):
+
+   ```sh
+   > ./acquire_and_save_stream <dcu_ip_address> -n 1000 --generate-flatfield-only --flatfield-file flatfield.tiff
+   ```
+
+   Then trigger acquisition—for example **one** software trigger if each trigger emits 1000 frames—from **`dectris_detector_control`** (after `make`):
+
+   ```sh
+   > ./software_trigger_detector <dcu_ip_address> -n 1
+   ```
+
+   Code: [`acquire_and_save_stream.c`](acquire_and_save_stream.c), [`software_trigger_detector.cpp`](../dectris_detector_control/cpp/software_trigger_detector.cpp). The trigger **`-n`** must stay consistent with **`ntrigger`** from step 2. When acquisition finishes, **`flatfield.tiff`** is at the **`--flatfield-file`** path.
+
+4. **Routine streaming** — Start your stream receiver (e.g. [`DectrisStream2Receiver_linux`](DectrisStream2Receiver_linux.c)), trigger as needed, and use **`wait_idle_and_disarm_detector`** when finishing the acquisition sequence (see [`dectris_detector_control`](../dectris_detector_control/) README).
+
+---
 
 ## Layout
 
@@ -28,7 +64,7 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 | `src/stream2_stats` | Receive / throughput statistics |
 | `src/stream2_decompress` | Decompress image channels |
 | `src/stream2_image_buffer` | In-memory buffering, optional ZMQ zero-copy |
-| `src/tiff_writer` | Write TIFFs from buffered images (single- or multi-threaded flush) |
+| `src/tiff_writer` | Write TIFF from buffered images (single- or multi-threaded flush) |
 
 ### Programs
 
@@ -38,7 +74,7 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 | `stream2_buffer` | Receive and buffer images, print stats; does not decompress for storage or write files. |
 | `stream2_buffer_decode` | Same as `stream2_buffer`, then a final pass to decompress and report compression ratios. |
 | `DectrisStream2Receiver_linux` | Buffer, decompress, write TIFFs; `--threads` sets writer threads (default 10). |
-| `acquire_and_save_stream` | Linux only: **`-n` / `--images` COUNT** then save TIFFs. **`--generate-flatfield`**: per-frame TIFFs **and** mean flatfield. **`--generate-flatfield-only`**: flatfield only. **`--flatfield-file PATH`**: flatfield TIFF destination (with either generate flag). Default flatfield path is under `--output` / `serie_*` if `--flatfield-file` is omitted. Auto channel: `image` → `data` → unnamed → most common non-mask. |
+| `acquire_and_save_stream` | Linux: **`-n` / `--images` COUNT** then save. **`--generate-flatfield`**: per-frame TIFFs **and** mean flatfield. **`--generate-flatfield-only`**: flatfield only. **`--flatfield-file PATH`**: flatfield destination. Default flatfield path under `--output` / `serie_*` if omitted. Auto channel: `image` → `data` → unnamed → most common non-mask. |
 | `stream2_bifurcator` | Relay: listen on one host/port, buffer, forward raw stream on another interface/port. |
 
 **Windows-only targets** (when building on Windows): `DectrisStream2Demo_windows`, `start_stream_eigerclient`.
