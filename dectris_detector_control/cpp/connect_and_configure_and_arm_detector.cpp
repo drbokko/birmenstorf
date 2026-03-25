@@ -99,13 +99,17 @@ int main(int argc, char *argv[]) {
     // CONFIGURATION  (IMPORTANT)
     // =============================================================================
     // Detector (Simplon-style layout for this stream demo):
-    //   Disable: countrate_correction_applied, retrigger, flatfield_correction_applied,
-    //            auto_summation.
-    //   counting_mode is a string parameter (not a bool): set explicitly as required;
-    //   this demo uses "normal".
-    //   Enable: virtual_pixel_correction_applied, mask_to_zero.
-    //   Then: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
-    //   Do NOT set photon_energy: it can overwrite threshold-related settings.
+    //   - Disable: countrate_correction_applied, retrigger, flatfield_correction_applied,
+    //              auto_summation.
+    /
+    //   - Enable: virtual_pixel_correction_applied, mask_to_zero.
+    //   - Set: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
+    //   - Note:
+    //     - counting_mode is a string parameter (not a bool): set explicitly as required;
+    //     - Do NOT set photon_energy: it can overwrite threshold-related settings.
+    //     - trigger_mode is a string parameter, "ints" for internal trigger, "exts" for external trigger.
+    //       Default value is ints but safer to set it explicitly. 1 trigger will acquire nimages frames.
+
     // Data path:
     //   Disable monitor; disable filewriter; enable stream (CBOR etc. below).
     // Usual settings for polychromatic beam
@@ -125,6 +129,7 @@ int main(int argc, char *argv[]) {
     dcu.setDetectorConfig("count_time", exposure_time);
     dcu.setDetectorConfig("frame_time", exposure_time + sleep_time);
     dcu.setDetectorConfig("nimages", number_of_images);
+    dcu.setDetectorConfig("trigger_mode", "ints";
     dcu.setDetectorConfig("ntrigger", number_of_triggers);
 
     std::printf("[SIMPLON API] -> count_time= %.9f s (configured)\n", exposure_time);

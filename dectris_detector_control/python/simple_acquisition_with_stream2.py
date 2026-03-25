@@ -64,8 +64,10 @@ if __name__ == '__main__':
     #   counting_mode is a string parameter (not a bool): set explicitly as required;
     #   this demo uses 'normal'.
     #   Enable: virtual_pixel_correction_applied, mask_to_zero.
-    #   Then: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
+    #   Then: threshold mode/energy, count_time, frame_time, nimages, trigger_mode, ntrigger.
     #   Do NOT set photon_energy: it can overwrite threshold-related settings.
+    #   trigger_mode is a string: "ints" for internal trigger, "exts" for external trigger.
+    #   Default is "ints" but safer to set explicitly. 1 trigger acquires nimages frames.
     # Data path:
     #   Disable monitor; disable filewriter; enable stream (CBOR etc. below).
     # Usual settings for polychromatic beam
@@ -86,6 +88,7 @@ if __name__ == '__main__':
     c.setDetectorConfig("count_time", exposure_time)
     c.setDetectorConfig('frame_time', exposure_time + sleep_time)
     c.setDetectorConfig("nimages", number_of_images)
+    c.setDetectorConfig("trigger_mode", "ints")  # "ints" internal, "exts" external
     c.setDetectorConfig("ntrigger", number_of_triggers)
 
     # Useful status readout

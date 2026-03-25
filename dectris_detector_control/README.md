@@ -1,9 +1,8 @@
-# DECTRIS detector control demo (`dectris_detector_control_demo`)
+# DECTRIS Detector Control Demo (`dectris_detector_control`)
 
-This repo is built around a **producer / consumer** split:
+DECTRIS Detector Control is built around the **producer / consumer** split, covering the control of producer side.
 
 - **Producer (these C++ tools + DCU)** — Configure the EIGER **DCU** so it **pushes** detector data over **stream v2** (**CBOR**). The three binaries only drive the REST **Simplon** API on the DCU. They do **not** receive or save frames.
-- **Consumer (your responsibility)** — A **separate program** (or another machine) that connects to the detector’s stream endpoint, decodes **CBOR**, and stores or processes images. This repository includes a CMake-based receiver under **`dectris_data_consumer/`** (e.g. `DectrisStream2Receiver_linux`, **`acquire_and_save_stream`** for a fixed frame count and optional flatfield TIFF; see its `README.md`). Start the consumer **before** you care about not losing data (typically before **`arm`**, or at least before you run the **trigger** script).
 
 The **Python** script is an optional **all-in-one** demo for the same REST sequence; it still does not implement a stream consumer.
 
@@ -14,7 +13,7 @@ The **Python** script is an optional **all-in-one** demo for the same REST seque
 | Step | Program | What it does |
 |------|---------|----------------|
 | **1 — Configure and Arm** | `connect_and_configure_and_arm_detector` | Defines the **acquisition contract** on the DCU: corrections, thresholds, timing, **`nimages`** (frames **per** software trigger), **`ntrigger`** (how many triggers the armed sequence allows), stream **on** (CBOR), monitor/filewriter **off**. Then **`arm`**. **No** frames are emitted until you trigger. |
-| **2 — Trigger (manual)** | `software_trigger_detector` | You run this **when you want data**. Each **`trigger`** command tells the detector to acquire **`nimages`** frames; they appear on the **stream** for your **consumer** to collect. **`-n`** on this program must match the **`ntrigger`** you configured in step 1 (same host). You can think of step 1 as reserving “up to **`ntrigger`** bursts of **`nimages`** frames” and step 2 as issuing those bursts on demand. |
+| **2 — Trigger (manual or external)** | `software_trigger_detector` | You run this **when you want data**. Each **`trigger`** command tells the detector to acquire **`nimages`** frames; they appear on the **stream** for your **consumer** to collect. **`-n`** on this program must match the **`ntrigger`** you configured in step 1 (same host). You can think of step 1 as reserving “up to **`ntrigger`** bursts of **`nimages`** frames” and step 2 as issuing those bursts on demand. |
 | **3 — Disarm** | `wait_idle_and_disarm_detector` | After the last trigger of a run, wait until **`state`** is **`idle`**, then **`disarm`** so the DCU leaves the armed acquisition path cleanly. |
 
 Edit **`number_of_images`** and **`number_of_triggers`** in `connect_and_configure_and_arm_detector.cpp` to match your experiment (example: **1000** images per trigger and a large **`ntrigger`** if you want many manual trigger batches under one arm). **`software_trigger_detector -n`** must equal the configured **`ntrigger`** for that arm cycle (or the number of triggers you intend to send before teardown).
