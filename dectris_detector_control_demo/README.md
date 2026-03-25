@@ -242,11 +242,11 @@ Read-only status: high voltage, temperature, humidity; echo count/frame time. No
 
 ### 5. Data interfaces (stream configuration)
 
-Monitor off, filewriter off, stream on with `format` `cbor` and `header_detail` `all`. Consumer runs elsewhere.
+Monitor off, filewriter off, stream on with `format` `cbor` and `header_detail` `all`. The Data Consumer (the Stream2 receiver) runs elsewhere.
 
 ```cpp
     // =============================================================================
-    // DATA ACQUISITION INTERFACES (stream v2 / CBOR; consumer runs in another process)
+    // DATA ACQUISITION INTERFACES (stream v2 / CBOR; the data consumer might run in another process or another machine)
     // =============================================================================
     dcu.setMonitorConfig("mode", "disabled");
     dcu.setFilewriterConfig("mode", "disabled");
