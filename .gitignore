@@ -3,3 +3,17 @@ connect_and_configure_and_arm_detector
 software_trigger_detector
 wait_idle_and_disarm_detector
 *__pycache__*
+
+# stream_v2/examples CMake (out-of-tree build recommended)
+stream_v2/examples/build/
+stream_v2/examples/_deps/
+stream_v2/examples/CMakeCache.txt
+stream_v2/examples/CMakeFiles/
+stream_v2/examples/cmake_install.cmake
+stream_v2/examples/Makefile
+stream_v2/examples/compile_commands.json
+stream_v2/examples/bin/
+stream_v2/examples/lib/
+stream_v2/examples/third_party/CMakeFiles/
+stream_v2/examples/third_party/cmake_install.cmake
+stream_v2/examples/third_party/Makefile
