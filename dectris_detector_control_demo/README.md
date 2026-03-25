@@ -1,12 +1,27 @@
 # DECTRIS detector control demo (`dectris_detector_control_demo`)
 
-**C++** and **Python** examples for a **DECTRIS EIGER** **DCU** over **HTTP REST** (Simplon-style API). The C++ flow is three steps: **configure + `arm`**, then **software `trigger`**, then **wait for `idle` + `disarm`**. **Python** keeps one script for the full sequence.
+This repo is built around a **producer / consumer** split:
 
-**Simplon API rules (summary).** Respect detector **state**; call `initialize` when needed; `arm` before `trigger`; `disarm` to leave the armed path. Subsystems use separate URL prefixes (`/detector/…`, `/stream/…`, …); config `PUT` bodies use a JSON `value` field. For authoritative rules, use the **SIMPLON API Reference** for your firmware.
+- **Producer (these C++ tools + DCU)** — Configure the EIGER **DCU** so it **pushes** detector data over **stream v2** (**CBOR**). The three binaries only drive the REST **Simplon** API on the DCU. They do **not** receive or save frames.
+- **Consumer (your responsibility)** — A **separate program** (or another machine) that connects to the detector’s stream endpoint, decodes **CBOR**, and stores or processes images. Start the consumer **before** you care about not losing data (typically before **`arm`**, or at least before you run the **trigger** script).
 
-**Detector configuration checklist**: **off** — `countrate_correction_applied`, `retrigger`, `flatfield_correction_applied`, `auto_summation`; **on** — `virtual_pixel_correction_applied`, `mask_to_zero`; `counting_mode` as a **string** (here `normal`); thresholds and `count_time` / `frame_time` / `nimages` / `ntrigger`; **do not** set `photon_energy`; **monitor** / **filewriter** **off**, **stream** **on**.
+The **Python** script is an optional **all-in-one** demo for the same REST sequence; it still does not implement a stream consumer.
 
-Neither C++ nor Python includes a stream **consumer**—run your receiver in **another process** before arming if you cannot miss frames.
+---
+
+## Philosophy: three C++ steps = producer side only
+
+| Step | Program | What it does |
+|------|---------|----------------|
+| **1 — Configure and Arm** | `connect_and_configure_and_arm_detector` | Defines the **acquisition contract** on the DCU: corrections, thresholds, timing, **`nimages`** (frames **per** software trigger), **`ntrigger`** (how many triggers the armed sequence allows), stream **on** (CBOR), monitor/filewriter **off**. Then **`arm`**. **No** frames are emitted until you trigger. |
+| **2 — Trigger (manual)** | `software_trigger_detector` | You run this **when you want data**. Each **`trigger`** command tells the detector to acquire **`nimages`** frames; they appear on the **stream** for your **consumer** to collect. **`-n`** on this program must match the **`ntrigger`** you configured in step 1 (same host). You can think of step 1 as reserving “up to **`ntrigger`** bursts of **`nimages`** frames” and step 2 as issuing those bursts on demand. |
+| **3 — Disarm** | `wait_idle_and_disarm_detector` | After the last trigger of a run, wait until **`state`** is **`idle`**, then **`disarm`** so the DCU leaves the armed acquisition path cleanly. |
+
+Edit **`number_of_images`** and **`number_of_triggers`** in `connect_and_configure_and_arm_detector.cpp` to match your experiment (example: **1000** images per trigger and a large **`ntrigger`** if you want many manual trigger batches under one arm). **`software_trigger_detector -n`** must equal the configured **`ntrigger`** for that arm cycle (or the number of triggers you intend to send before teardown).
+
+**Simplon API rules (summary).** Respect detector **state**; **`initialize`** when needed; **`arm`** before **`trigger`**; **`disarm`** after the run. Config **`PUT`** bodies use a JSON **`value`** field. See the **SIMPLON API Reference** for your firmware.
+
+**Detector configuration checklist** (same idea in C++ and Python): turn **off** `countrate_correction_applied`, `retrigger`, `flatfield_correction_applied`, `auto_summation`; turn **on** `virtual_pixel_correction_applied`, `mask_to_zero`; set **`counting_mode`** as a string (e.g. `normal`); set thresholds and **`count_time`** / **`frame_time`** / **`nimages`** / **`ntrigger`**; **do not** set **`photon_energy`** if it would disturb thresholds; **monitor** / **filewriter** **off**, **stream** **on**.
 
 ---
 
@@ -15,78 +30,61 @@ Neither C++ nor Python includes a stream **consumer**—run your receiver in **a
 | Path | Role |
 |------|------|
 | `Makefile` | Builds three C++ binaries (`libcurl` on Linux) |
-| `cpp/eiger_client.h`, `cpp/eiger_client.cpp` | C ABI for REST calls |
-| `cpp/eiger_session.hpp` | `EigerSession`: typed `setDetectorConfig` / stream / filewriter / monitor |
-| `cpp/connect_and_configure_and_arm_detector.cpp` | Part 1: configure + housekeeping + stream + `arm` |
-| `cpp/software_trigger_detector.cpp` | Part 2: `trigger` loop only |
-| `cpp/wait_idle_and_disarm_detector.cpp` | Part 3: poll `state` until idle, `disarm` |
-| `python/DEigerClient/` | Python client |
-| `python/simple_acquisition_with_stream2.py` | Full sequence in one script |
+| `cpp/eiger_client.*`, `cpp/eiger_session.hpp` | HTTP client + typed config helpers |
+| `cpp/connect_and_configure_and_arm_detector.cpp` | Producer **setup**: configure stream + **`arm`** |
+| `cpp/software_trigger_detector.cpp` | Producer **manual fire**: **`trigger`** × **N** |
+| `cpp/wait_idle_and_disarm_detector.cpp` | Producer **teardown**: wait **idle**, **`disarm`** |
+| `python/` | `DEigerClient` + `simple_acquisition_with_stream2.py` (full REST sequence in one process) |
 
 ---
 
-## C++ stack: `eiger_client` and `EigerSession`
+## C++ stack (brief)
 
-The C layer builds `{"value": …}` via `build_value_body` in `eiger_client.cpp`. **EigerSession** maps `bool`, `int`, `double`, and string literals to JSON value fragments. **Monitor** uses plain strings for `setMonitorConfig`. Use `setDetectorConfig(..., false)` for booleans, not `"false"` as a string. **`eiger_set_http_trace(stdout)`** prefixes outgoing requests with `[SIMPLON API] ->`; the C++ programs **`printf`** selected status lines as **`[SIMPLON API] <-`** where noted in source.
+**`eiger_client`** builds JSON bodies `{"value": …}`. **`EigerSession`** overloads **`bool` / `int` / `double` / string** so call sites stay readable. **`eiger_set_http_trace(stdout)`** logs **`[SIMPLON API] ->`** on each request; the programs also print **`[SIMPLON API] <-`** for selected status reads.
 
 ---
 
 ## Build and run
 
-**C++**
-
 ```bash
 make
+```
+
+**Typical producer workflow** (consumer already running if you must capture everything):
+
+```bash
 ./connect_and_configure_and_arm_detector [--force-init] [HOST]
-./software_trigger_detector [-n N] [HOST]   # -n must match ntrigger in part 1 source
+# … when ready to generate data …
+./software_trigger_detector [-n N] [HOST]   # N = ntrigger from step 1 source
 ./wait_idle_and_disarm_detector [HOST]
 ```
 
-**Python**
+Set **`EIGER_API_VERSION`** if the DCU API segment is not **`1.8.0`**.
+
+**Python** (single-process reference, includes trigger + idle + disarm):
 
 ```bash
 cd python && python3 simple_acquisition_with_stream2.py
 ```
 
-Set `EIGER_API_VERSION` if the DCU uses an API segment other than `1.8.0`.
-
 ---
 
-## Code walkthrough (C++ part 1): `cpp/connect_and_configure_and_arm_detector.cpp`
+## Walkthrough (producer scripts)
 
-### Helpers (before `main`)
+### Part 1 — `connect_and_configure_and_arm_detector.cpp`
 
-`stateIsIdle`, `jsonValueNumber`, `printStatusLine` parse status JSON from `getStatus`; no extra HTTP calls.
+Sets **`nimages`** / **`ntrigger`** in detector config, enables **stream** (**CBOR**), **`arm`**. Prints the suggested **`software_trigger_detector -n …`** and **`wait_idle_and_disarm_detector`** command line. Sections: **USER INPUT**, **CONNECT**, **INITIALIZE**, **CONFIGURATION (IMPORTANT)**, housekeeping **`[SIMPLON API] <-`**, **DATA ACQUISITION INTERFACES**, **ARM**.
 
-### Sections in `main`
+### Part 2 — `software_trigger_detector.cpp`
 
-1. **USER INPUT** — `HOST`, `--force-init`; constants `threshold_ev`, `number_of_images`, `number_of_triggers`, timing.
-2. **CONNECT TO DETECTOR** — `eiger_set_http_trace(stdout)`, `EigerSession`, response buffer.
-3. **INITIALIZE** — `GET` `state`; `[SIMPLON API] <-` full JSON; `initialize` if needed.
-4. **CONFIGURATION (IMPORTANT)** — long comment block + `setDetectorConfig` / thresholds / `nimages` / `ntrigger`; `[SIMPLON API] ->` lines for configured count/frame time.
-5. **Housekeeping** — `GET` high voltage, temperature, humidity; `[SIMPLON API] <-` (numeric or raw).
-6. **DATA ACQUISITION INTERFACES** — monitor/filewriter off, stream CBOR.
-7. **ARM** — `sendCommand("arm")`; prints how to run parts 2 and 3 (`-n` + `wait_idle_and_disarm_detector`).
+Sends **`N`** **`trigger`** commands only. On **`trigger`** failure it **`disarm`**s as an emergency recovery hint. After success, run part 3.
 
----
+### Part 3 — `wait_idle_and_disarm_detector.cpp`
 
-## Code walkthrough (C++ part 2): `cpp/software_trigger_detector.cpp`
-
-1. **USER INPUT** — `HOST`, `-n` (default 1).
-2. **CONNECT** — trace + `EigerSession`.
-3. **TRIGGER** — loop `sendCommand("trigger")`; on failure emergency `disarm` and exit; success prints hint to run part 3.
-
----
-
-## Code walkthrough (C++ part 3): `cpp/wait_idle_and_disarm_detector.cpp`
-
-1. **USER INPUT** — `HOST`.
-2. **CONNECT** — trace + `EigerSession`, response buffer.
-3. **Wait for idle** — poll `GET` `state`, **`[SIMPLON API] <-`** each response until idle.
-4. **`disarm`** — `sendCommand("disarm")`.
+Polls **`state`** with **`[SIMPLON API] <-`** until **idle**, then **`disarm`**.
 
 ---
 
 ## Python
 
-`python/simple_acquisition_with_stream2.py` runs configure → housekeeping → stream → `arm` → `trigger` → wait `idle` → `disarm` in one process, with **`verbose=True`** for HTTP logging. Same **CONFIGURATION (IMPORTANT)** ideas as the C++ programs; compare with `EigerSession` typing.
+**`simple_acquisition_with_stream2.py`** runs configure → housekeeping → stream → **`arm`** → **`trigger`** → wait **`idle`** → **`disarm`** in one process with **`verbose=True`**. It matches the **same Simplon checklist** as part 1 but does not split manual trigger/teardown; it does **not** replace a stream **consumer**.
