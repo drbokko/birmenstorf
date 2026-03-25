@@ -129,6 +129,11 @@ target_link_libraries(stream2_buffer_decode stream2_helpers)
 add_executable(DectrisStream2Receiver_linux DectrisStream2Receiver_linux.c)
 target_link_libraries(DectrisStream2Receiver_linux stream2_helpers)
 
+if(NOT WIN32)
+    add_executable(acquire_and_save_stream acquire_and_save_stream.c)
+    target_link_libraries(acquire_and_save_stream stream2_helpers)
+endif()
+
 add_executable(stream2_bifurcator stream2_bifurcator.c)
 target_link_libraries(stream2_bifurcator stream2_helpers)
 

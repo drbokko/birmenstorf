@@ -251,6 +251,16 @@ void tiff_writer_set_output_path(const char* path) {
     }
 }
 
+const char* tiff_writer_get_output_base(void) {
+    if (g_output_path[0] != '\0')
+        return g_output_path;
+#ifdef _WIN32
+    return "Z:/";
+#else
+    return "/dev/shm";
+#endif
+}
+
 void tiff_writer_format_path(char* dst,
                               size_t dst_size,
                               const char* channel,

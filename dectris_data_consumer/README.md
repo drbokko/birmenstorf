@@ -38,6 +38,7 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 | `stream2_buffer` | Receive and buffer images, print stats; does not decompress for storage or write files. |
 | `stream2_buffer_decode` | Same as `stream2_buffer`, then a final pass to decompress and report compression ratios. |
 | `DectrisStream2Receiver_linux` | Buffer, decompress, write TIFFs; `--threads` sets writer threads (default 10). |
+| `acquire_and_save_stream` | Linux only: **`-n` / `--images` COUNT** then save TIFFs. **`--generate-flatfield`**: per-frame TIFFs **and** auto-channel mean flatfield (`stream2_average_000000.tiff`). **`--generate-flatfield-only`**: flatfield only (no per-frame files). Auto channel order: `image` → `data` → unnamed/empty → most common non-mask. Prints paths on stdout. |
 | `stream2_bifurcator` | Relay: listen on one host/port, buffer, forward raw stream on another interface/port. |
 
 **Windows-only targets** (when building on Windows): `DectrisStream2Demo_windows`, `start_stream_eigerclient`.

@@ -15,6 +15,9 @@ int tiff_writer_write(const char* path,
 /* Set custom output path for TIFF files (NULL or empty string to use default) */
 void tiff_writer_set_output_path(const char* path);
 
+/* Output root in use (custom path or default e.g. /dev/shm). Do not modify. */
+const char* tiff_writer_get_output_base(void);
+
 /* Format a TIFF filename for an image (creates series folder if needed) */
 void tiff_writer_format_path(char* dst,
                              size_t dst_size,
