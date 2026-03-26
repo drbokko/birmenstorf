@@ -101,7 +101,7 @@ int main(int argc, char *argv[]) {
     // Detector (Simplon-style layout for this stream demo):
     //   - Disable: countrate_correction_applied, retrigger, flatfield_correction_applied,
     //              auto_summation.
-    /
+    //
     //   - Enable: virtual_pixel_correction_applied, mask_to_zero.
     //   - Set: threshold mode/energy, count_time, frame_time, nimages, ntrigger.
     //   - Note:
@@ -129,7 +129,7 @@ int main(int argc, char *argv[]) {
     dcu.setDetectorConfig("count_time", exposure_time);
     dcu.setDetectorConfig("frame_time", exposure_time + sleep_time);
     dcu.setDetectorConfig("nimages", number_of_images);
-    dcu.setDetectorConfig("trigger_mode", "ints";
+    dcu.setDetectorConfig("trigger_mode", "ints");
     dcu.setDetectorConfig("ntrigger", number_of_triggers);
 
     std::printf("[SIMPLON API] -> count_time= %.9f s (configured)\n", exposure_time);
