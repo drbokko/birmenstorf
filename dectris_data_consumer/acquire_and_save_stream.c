@@ -1,8 +1,10 @@
 /*
  * acquire_and_save_stream.c — receive a fixed number of IMAGE messages, write TIFFs, optional flatfield TIFF
  *
- * Stops after -n / --images complete stream IMAGE messages. Flushes per-frame TIFFs like
- * DectrisStream2Receiver_linux. Optional --generate-flatfield writes per-frame TIFFs plus
+ * Stops after -n / --images complete stream IMAGE messages. Images are buffered as on the wire while a
+ * background pthread FIFO-decodes into a second stack (see stream2_buffer_append_decoded_from_wire).
+ * stderr shows recv IMAGE count vs decoded fifo depth (decode backlog may trail during heavy compression).
+ * Flushes per-frame TIFFs like DectrisStream2Receiver_linux. Optional --generate-flatfield writes per-frame TIFFs plus
  * a mean flatfield; --generate-flatfield-only writes only the flatfield. Channel for the
  * mean is auto-selected (image, data, unnamed/empty, or most common non-mask).
  * Optional --flatfield-file PATH sets the flatfield TIFF path.
@@ -14,9 +16,11 @@
 #include "stream2_common.h"
 #include "stream2_image_buffer.h"
 #include "stream2_stats.h"
+#include "stream2_buffer_decode_stack.h"
 #include "tiff_writer.h"
 #include "stream2.h"
 #include "compression/src/compression.h"
+#include <pthread.h>
 #include <zmq.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -604,6 +608,114 @@ static int write_average_tiff_for_image_channel(struct stream2_buffer_ctx* buf,
     return 0;
 }
 
+/* Pipelined wire buffer + FIFO decode (see main recv loop). */
+static struct stream2_buffer_ctx* acquire_pipeline_wire;
+static pthread_mutex_t acquire_pipeline_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t acquire_pipeline_cv = PTHREAD_COND_INITIALIZER;
+static volatile sig_atomic_t acquire_pipeline_receive_done;
+static volatile sig_atomic_t acquire_pipeline_decode_failed;
+static size_t acquire_pipeline_decode_next;
+static pthread_mutex_t acquire_progress_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct timespec acquire_progress_last;
+
+static void acquire_progress_report(struct stream2_stats* s,
+                                    const struct stream2_buffer_ctx* wire,
+                                    const struct stream2_buffer_ctx* decoded,
+                                    int force) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    pthread_mutex_lock(&acquire_progress_mu);
+    double since_line = stream2_time_diff_sec(&now, &acquire_progress_last);
+    if (!force && since_line < 0.2) {
+        pthread_mutex_unlock(&acquire_progress_mu);
+        return;
+    }
+    acquire_progress_last = now;
+    pthread_mutex_unlock(&acquire_progress_mu);
+
+    size_t wlen = 0;
+    size_t dlen = 0;
+    pthread_mutex_lock(&acquire_pipeline_mu);
+    if (wire)
+        wlen = wire->len;
+    if (decoded)
+        dlen = decoded->len;
+    pthread_mutex_unlock(&acquire_pipeline_mu);
+
+    double rate_elapsed = stream2_time_diff_sec(&now, &s->last_report);
+    if (rate_elapsed <= 0.0)
+        rate_elapsed = 1e-9;
+    double gbps = (s->bytes_window * 8.0) / (rate_elapsed * 1e9);
+    double rx_gb = s->bytes_total / 1e9;
+    double wire_gib =
+            wire ? wire->total_bytes / (1024.0 * 1024.0 * 1024.0) : 0.0;
+    double wire_cap_gib =
+            wire ? wire->bytes_limit / (1024.0 * 1024.0 * 1024.0) : 0.0;
+    double dec_gib = decoded ? decoded->total_bytes /
+                                       (1024.0 * 1024.0 * 1024.0)
+                             : 0.0;
+    double dec_cap_gib = decoded ? decoded->bytes_limit /
+                                           (1024.0 * 1024.0 * 1024.0)
+                                 : 0.0;
+    size_t backlog = wlen > dlen ? wlen - dlen : 0;
+
+    fprintf(stderr,
+            "\rrecv: %" PRIu64
+            " IMAGE msg(s) | fifo decoded: %zu | wire subimgs: %zu | "
+            "decode backlog: %zu | net: %.2f Gb/s | rx cum: %.3f GB | "
+            "wire %.2f/%.0f GiB | decoded %.2f/%.0f GiB",
+            s->images_total, dlen, wlen, backlog, gbps, rx_gb, wire_gib,
+            wire_cap_gib, dec_gib, dec_cap_gib);
+    if (force)
+        fprintf(stderr, "\n");
+    fflush(stderr);
+
+    s->bytes_window = 0;
+    s->last_report = now;
+}
+
+typedef struct {
+    struct stream2_buffer_ctx* wire;
+    struct stream2_buffer_ctx* decoded;
+    struct stream2_stats* stats;
+} acquire_decode_pipeline_ctx;
+
+static void* acquire_decode_pipeline_fn(void* arg) {
+    acquire_decode_pipeline_ctx* c = (acquire_decode_pipeline_ctx*)arg;
+    for (;;) {
+        pthread_mutex_lock(&acquire_pipeline_mu);
+        while (!acquire_pipeline_decode_failed && !g_stop &&
+               acquire_pipeline_decode_next >= c->wire->len &&
+               !acquire_pipeline_receive_done) {
+            pthread_cond_wait(&acquire_pipeline_cv, &acquire_pipeline_mu);
+        }
+        if (acquire_pipeline_decode_next >= c->wire->len &&
+            acquire_pipeline_receive_done) {
+            pthread_mutex_unlock(&acquire_pipeline_mu);
+            break;
+        }
+        if (acquire_pipeline_decode_failed || g_stop) {
+            pthread_mutex_unlock(&acquire_pipeline_mu);
+            break;
+        }
+        struct stream2_buffered_image snap =
+                c->wire->items[acquire_pipeline_decode_next];
+        acquire_pipeline_decode_next++;
+        pthread_mutex_unlock(&acquire_pipeline_mu);
+
+        if (stream2_buffer_append_decoded_from_wire(&snap, c->decoded) != 0) {
+            acquire_pipeline_decode_failed = 1;
+            pthread_mutex_lock(&acquire_pipeline_mu);
+            pthread_cond_broadcast(&acquire_pipeline_cv);
+            pthread_mutex_unlock(&acquire_pipeline_mu);
+            break;
+        }
+        acquire_progress_report(c->stats, c->wire, c->decoded, 0);
+    }
+    return NULL;
+}
+
 static void handle_msg(struct stream2_msg* msg,
                        size_t msg_size,
                        struct stream2_stats* s,
@@ -615,10 +727,16 @@ static void handle_msg(struct stream2_msg* msg,
         stream2_stats_add_image(s, msg_size);
         if (buf) {
             struct stream2_image_msg* im = (struct stream2_image_msg*)msg;
+            if (buf == acquire_pipeline_wire)
+                pthread_mutex_lock(&acquire_pipeline_mu);
             for (size_t i = 0; i < im->data.len; i++) {
                 struct stream2_image_data* d = &im->data.ptr[i];
                 stream2_buffer_image(&d->data, im->image_id, im->series_id,
                                      d->channel, buf, owner_slot, src_msg);
+            }
+            if (buf == acquire_pipeline_wire) {
+                pthread_cond_broadcast(&acquire_pipeline_cv);
+                pthread_mutex_unlock(&acquire_pipeline_mu);
             }
             if (fl && fl->target_frames > 0) {
                 fl->frames_received++;
@@ -662,7 +780,7 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "  -n, --images COUNT  stop after this many IMAGE messages\n");
     fprintf(stderr,
-            "  --threads M          TIFF writer threads (default 10)\n");
+            "  --threads M          TIFF writer threads (default 10); decode is pipelined FIFO\n");
     fprintf(stderr,
             "  --generate-flatfield       save per-frame TIFFs and a mean "
             "flatfield (stream2_average_*.tiff)\n");
@@ -832,15 +950,42 @@ int main(int argc, char** argv) {
     struct stream2_stats s = {0};
     stream2_stats_init(&s);
 
-    uint64_t buffer_limit = stream2_parse_buffer_limit_gb(20);
-    struct stream2_buffer_ctx buf;
-    stream2_buffer_init(&buf, buffer_limit);
+    uint64_t wire_limit = stream2_parse_wire_buffer_limit_gb(40);
+    uint64_t decoded_limit = stream2_parse_buffer_limit_gb(40);
+    struct stream2_buffer_ctx wire_buf;
+    struct stream2_buffer_ctx decoded_buf;
+    stream2_buffer_init(&wire_buf, wire_limit);
+    stream2_buffer_init(&decoded_buf, decoded_limit);
+
+    clock_gettime(CLOCK_MONOTONIC, &acquire_progress_last);
+    acquire_pipeline_receive_done = 0;
+    acquire_pipeline_decode_failed = 0;
+    acquire_pipeline_decode_next = 0;
+    acquire_pipeline_wire = &wire_buf;
+
+    acquire_decode_pipeline_ctx dctx = {.wire = &wire_buf,
+                                          .decoded = &decoded_buf,
+                                          .stats = &s};
+    pthread_t decode_tid;
+    if (pthread_create(&decode_tid, NULL, acquire_decode_pipeline_fn, &dctx)
+        != 0) {
+        fprintf(stderr, "error: pthread_create for decode pipeline failed\n");
+        acquire_pipeline_wire = NULL;
+        stream2_buffer_free(&wire_buf);
+        stream2_buffer_free(&decoded_buf);
+        zmq_msg_close(&msg);
+        zmq_close(socket);
+        zmq_ctx_term(ctx);
+        return EXIT_FAILURE;
+    }
 
     struct frame_limit fl = {.target_frames = target_frames,
                              .frames_received = 0,
                              .stop = 0};
 
     for (;;) {
+        if (acquire_pipeline_decode_failed)
+            break;
         if (g_stop)
             break;
         if (fl.stop)
@@ -851,7 +996,7 @@ int main(int argc, char** argv) {
         int rc = zmq_msg_recv(&msg, socket, 0);
         if (rc == -1) {
             if (errno == EAGAIN) {
-                stream2_stats_report(&s, &buf, 0);
+                acquire_progress_report(&s, &wire_buf, &decoded_buf, 0);
                 if (g_stop)
                     break;
                 continue;
@@ -868,27 +1013,59 @@ int main(int argc, char** argv) {
         size_t msg_size = zmq_msg_size(&msg);
 
         enum stream2_result r;
-        if ((r = parse_msg(msg_data, msg_size, &s, &buf, &owner_slot, &msg,
-                           &fl)))
+        if ((r = parse_msg(msg_data, msg_size, &s, &wire_buf, &owner_slot,
+                           &msg, &fl)))
             break;
 
-        stream2_stats_report(&s, &buf, 0);
+        if (acquire_pipeline_decode_failed)
+            break;
+
+        acquire_progress_report(&s, &wire_buf, &decoded_buf, 0);
     }
 
-    stream2_stats_report(&s, &buf, 1);
-    if (save_per_frame && buf.len > 0)
-        tiff_writer_flush_buffer_mt(&buf, num_threads);
+    acquire_pipeline_receive_done = 1;
+    pthread_cond_broadcast(&acquire_pipeline_cv);
+    pthread_join(decode_tid, NULL);
+    acquire_pipeline_wire = NULL;
+
+    acquire_progress_report(&s, &wire_buf, &decoded_buf, 1);
+
+    if (acquire_pipeline_decode_failed) {
+        fprintf(stderr, "error: decode pipeline failed\n");
+        stream2_buffer_free(&wire_buf);
+        stream2_buffer_free(&decoded_buf);
+        zmq_msg_close(&msg);
+        zmq_close(socket);
+        zmq_ctx_term(ctx);
+        return EXIT_FAILURE;
+    }
+    if (!g_stop && wire_buf.len > 0 && decoded_buf.len != wire_buf.len) {
+        fprintf(stderr,
+                "error: decoded fifo incomplete (%zu decoded vs %zu wire)\n",
+                decoded_buf.len, wire_buf.len);
+        stream2_buffer_free(&wire_buf);
+        stream2_buffer_free(&decoded_buf);
+        zmq_msg_close(&msg);
+        zmq_close(socket);
+        zmq_ctx_term(ctx);
+        return EXIT_FAILURE;
+    }
+
+    stream2_buffer_free(&wire_buf);
+
+    if (save_per_frame && decoded_buf.len > 0)
+        tiff_writer_flush_buffer_mt(&decoded_buf, num_threads);
 
     char flat_path[512] = {0};
     int flatfield_ok = 0;
     uint64_t series_id = 0;
 
-    if (buf.len > 0) {
-        series_id = buf.items[0].series_id;
-        for (size_t i = 0; i < buf.len; i++) {
-            if (buf.items[i].channel &&
-                strcasecmp(buf.items[i].channel, "image") == 0) {
-                series_id = buf.items[i].series_id;
+    if (decoded_buf.len > 0) {
+        series_id = decoded_buf.items[0].series_id;
+        for (size_t i = 0; i < decoded_buf.len; i++) {
+            if (decoded_buf.items[i].channel &&
+                strcasecmp(decoded_buf.items[i].channel, "image") == 0) {
+                series_id = decoded_buf.items[i].series_id;
                 break;
             }
         }
@@ -896,16 +1073,16 @@ int main(int argc, char** argv) {
         if (want_flatfield) {
             struct avg_channel_spec avg_spec;
             memset(&avg_spec, 0, sizeof(avg_spec));
-            if (auto_pick_average_channel(&buf, &avg_spec) == 0) {
-                for (size_t i = 0; i < buf.len; i++) {
-                    if (channel_matches_avg(&buf.items[i], &avg_spec)) {
-                        series_id = buf.items[i].series_id;
+            if (auto_pick_average_channel(&decoded_buf, &avg_spec) == 0) {
+                for (size_t i = 0; i < decoded_buf.len; i++) {
+                    if (channel_matches_avg(&decoded_buf.items[i], &avg_spec)) {
+                        series_id = decoded_buf.items[i].series_id;
                         break;
                     }
                 }
                 int ar = write_average_tiff_for_image_channel(
-                        &buf, series_id, &avg_spec, flatfield_file, flat_path,
-                        sizeof(flat_path));
+                        &decoded_buf, series_id, &avg_spec, flatfield_file,
+                        flat_path, sizeof(flat_path));
                 if (ar != 0)
                     fprintf(stderr, "warn: flatfield step failed\n");
                 else if (flat_path[0] != '\0')
@@ -947,6 +1124,6 @@ int main(int argc, char** argv) {
     zmq_msg_close(&msg);
     zmq_close(socket);
     zmq_ctx_term(ctx);
-    stream2_buffer_free(&buf);
+    stream2_buffer_free(&decoded_buf);
     return EXIT_SUCCESS;
 }

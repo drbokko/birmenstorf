@@ -2,8 +2,8 @@
  * stream2_buffer.c - Buffer images in memory with zero-copy support
  *
  * Receives stream data over ZMQ, buffers images in memory (up to configurable
- * limit), and reports throughput statistics. Uses zero-copy where possible.
- * Does NOT decompress or save files.
+ * limit), and reports throughput statistics. Payloads are stored as on the wire
+ * (compressed frames stay compressed). Does not save files.
  */
 #include "stream2_common.h"
 #include "stream2_image_buffer.h"
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
     struct stream2_stats s = {0};
     stream2_stats_init(&s);
 
-    uint64_t buffer_limit = stream2_parse_buffer_limit_gb(20);
+    uint64_t buffer_limit = stream2_parse_wire_buffer_limit_gb(40);
     struct stream2_buffer_ctx buf;
     stream2_buffer_init(&buf, buffer_limit);
 

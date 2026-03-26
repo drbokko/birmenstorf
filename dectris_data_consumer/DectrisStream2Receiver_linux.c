@@ -1,15 +1,17 @@
 /*
  * DectrisStream2Receiver_linux.c - Multi-threaded TIFF writer
  *
- * Like stream2_buffer_decode, but writes buffered images to TIFF files on disk
- * using multi-threaded parallel writing. Thread count configurable via
- * command-line option (default 10).
+ * Buffers images as on the wire, then a pthread builds a decoded in-memory stack
+ * before multi-threaded TIFF writing. Thread count applies to decode and flush
+ * (default 10).
  */
 #include "stream2_common.h"
 #include "stream2_image_buffer.h"
 #include "stream2_stats.h"
+#include "stream2_buffer_decode_stack.h"
 #include "tiff_writer.h"
 #include "stream2.h"
+#include <pthread.h>
 #include <zmq.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -203,6 +205,21 @@ static enum stream2_result parse_msg(const uint8_t* msg_data,
     return STREAM2_OK;
 }
 
+typedef struct {
+    const struct stream2_buffer_ctx* wire;
+    struct stream2_buffer_ctx* decoded;
+    uint64_t decoded_limit;
+    int num_threads;
+    int result;
+} rx_decode_stack_job;
+
+static void* rx_decode_stack_thread(void* arg) {
+    rx_decode_stack_job* j = arg;
+    j->result = stream2_buffer_build_decoded_stack_mt(
+            j->wire, j->decoded, j->decoded_limit, j->num_threads);
+    return NULL;
+}
+
 int main(int argc, char** argv) {
     int num_threads = 10;  /* default thread count */
     const char* host = NULL;
@@ -286,9 +303,12 @@ int main(int argc, char** argv) {
     struct stream2_stats s = {0};
     stream2_stats_init(&s);
 
-    uint64_t buffer_limit = stream2_parse_buffer_limit_gb(20);
-    struct stream2_buffer_ctx buf;
-    stream2_buffer_init(&buf, buffer_limit);
+    uint64_t wire_limit = stream2_parse_wire_buffer_limit_gb(40);
+    uint64_t decoded_limit = stream2_parse_buffer_limit_gb(40);
+    struct stream2_buffer_ctx wire_buf;
+    struct stream2_buffer_ctx decoded_buf;
+    stream2_buffer_init(&wire_buf, wire_limit);
+    stream2_buffer_init(&decoded_buf, 0);
 
     for (;;) {
         if (g_stop)
@@ -299,7 +319,7 @@ int main(int argc, char** argv) {
         int rc = zmq_msg_recv(&msg, socket, 0);
         if (rc == -1) {
             if (errno == EAGAIN) {
-                stream2_stats_report(&s, &buf, 0);
+                stream2_stats_report(&s, &wire_buf, 0);
                 if (g_stop)
                     break;
                 continue;
@@ -316,15 +336,44 @@ int main(int argc, char** argv) {
         size_t msg_size = zmq_msg_size(&msg);
 
         enum stream2_result r;
-        if ((r = parse_msg(msg_data, msg_size, &s, &buf, &owner_slot, &msg)))
+        if ((r = parse_msg(msg_data, msg_size, &s, &wire_buf, &owner_slot,
+                           &msg)))
             break;
 
-        stream2_stats_report(&s, &buf, 0);
+        stream2_stats_report(&s, &wire_buf, 0);
     }
 
 #ifndef _WIN32
-    stream2_stats_report(&s, &buf, 1);
-    tiff_writer_flush_buffer_mt(&buf, num_threads);
+    stream2_stats_report(&s, &wire_buf, 1);
+    if (wire_buf.len > 0) {
+        rx_decode_stack_job job = {.wire = &wire_buf,
+                                   .decoded = &decoded_buf,
+                                   .decoded_limit = decoded_limit,
+                                   .num_threads = num_threads,
+                                   .result = 0};
+        pthread_t decode_tid;
+        if (pthread_create(&decode_tid, NULL, rx_decode_stack_thread, &job)
+            != 0) {
+            fprintf(stderr,
+                    "warn: pthread_create failed; decoding on main thread\n");
+            job.result = stream2_buffer_build_decoded_stack_mt(
+                    &wire_buf, &decoded_buf, decoded_limit, num_threads);
+        } else {
+            pthread_join(decode_tid, NULL);
+        }
+        if (job.result != 0) {
+            fprintf(stderr, "error: building decoded image stack failed\n");
+            stream2_buffer_free(&wire_buf);
+            stream2_buffer_free(&decoded_buf);
+            zmq_msg_close(&msg);
+            zmq_close(socket);
+            zmq_ctx_term(ctx);
+            return EXIT_FAILURE;
+        }
+    }
+    stream2_buffer_free(&wire_buf);
+    stream2_stats_report(&s, &decoded_buf, 1);
+    tiff_writer_flush_buffer_mt(&decoded_buf, num_threads);
     if (have_iface_stats) {
         if (read_iface_stats(iface, &net_end) == 0) {
             fprintf(stderr,
@@ -349,12 +398,25 @@ int main(int argc, char** argv) {
         }
     }
 #else
-    stream2_stats_report(&s, &buf, 1);
-    tiff_writer_flush_buffer_mt(&buf, num_threads);
+    stream2_stats_report(&s, &wire_buf, 1);
+    if (stream2_buffer_build_decoded_stack_mt(&wire_buf, &decoded_buf,
+                                              decoded_limit, num_threads)
+        != 0) {
+        fprintf(stderr, "error: building decoded image stack failed\n");
+        stream2_buffer_free(&wire_buf);
+        stream2_buffer_free(&decoded_buf);
+        zmq_msg_close(&msg);
+        zmq_close(socket);
+        zmq_ctx_term(ctx);
+        return EXIT_FAILURE;
+    }
+    stream2_buffer_free(&wire_buf);
+    stream2_stats_report(&s, &decoded_buf, 1);
+    tiff_writer_flush_buffer_mt(&decoded_buf, num_threads);
 #endif
     zmq_msg_close(&msg);
     zmq_close(socket);
     zmq_ctx_term(ctx);
-    stream2_buffer_free(&buf);
+    stream2_buffer_free(&decoded_buf);
     return EXIT_SUCCESS;
 }

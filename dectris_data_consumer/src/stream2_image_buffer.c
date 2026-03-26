@@ -37,14 +37,13 @@ void stream2_buffer_free(struct stream2_buffer_ctx* buf) {
             free((void*)buf->items[i].data);
         }
     }
-    
+
     /* Second pass: free owners that have no more refs.
      * Track which owners we've already freed to avoid double-free
      * when multiple images share the same owner (multi-channel messages). */
     for (size_t i = 0; i < buf->len; i++) {
         struct stream2_msg_owner* owner = buf->items[i].owner;
         if (owner && owner->refs == 0) {
-            /* Check if we've already seen this exact owner pointer earlier in the loop */
             int already_seen = 0;
             for (size_t j = 0; j < i; j++) {
                 if (buf->items[j].owner == owner) {
@@ -53,8 +52,6 @@ void stream2_buffer_free(struct stream2_buffer_ctx* buf) {
                 }
             }
             if (!already_seen) {
-                /* This is the first time we see this owner, free it and
-                 * set all references to this owner to NULL */
                 struct stream2_msg_owner* owner_to_free = owner;
                 for (size_t j = 0; j < buf->len; j++) {
                     if (buf->items[j].owner == owner_to_free) {
@@ -177,8 +174,10 @@ enum stream2_result stream2_buffer_image(
     if (compressed) {
         if (*owner_slot == NULL) {
             *owner_slot = calloc(1, sizeof(**owner_slot));
-            if (!*owner_slot)
+            if (!*owner_slot) {
+                buf->len--;
                 return STREAM2_ERROR_OUT_OF_MEMORY;
+            }
             zmq_msg_init(&(*owner_slot)->msg);
             zmq_msg_move(&(*owner_slot)->msg, src_msg);
         }
@@ -191,8 +190,10 @@ enum stream2_result stream2_buffer_image(
     } else if (no_compression && expected_shape && expected_type) {
         if (*owner_slot == NULL) {
             *owner_slot = calloc(1, sizeof(**owner_slot));
-            if (!*owner_slot)
+            if (!*owner_slot) {
+                buf->len--;
                 return STREAM2_ERROR_OUT_OF_MEMORY;
+            }
             zmq_msg_init(&(*owner_slot)->msg);
             zmq_msg_move(&(*owner_slot)->msg, src_msg);
         }
@@ -204,6 +205,7 @@ enum stream2_result stream2_buffer_image(
         bi->data = malloc(data_size);
         if (!bi->data) {
             free(decompress_buffer);
+            buf->len--;
             return STREAM2_ERROR_OUT_OF_MEMORY;
         }
         memcpy((void*)bi->data, data, data_size);

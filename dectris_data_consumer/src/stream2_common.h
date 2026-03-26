@@ -112,7 +112,7 @@ static inline long long stream2_time_diff_ns(const struct timespec* a,
     return (a->tv_sec - b->tv_sec) * 1000000000LL + (a->tv_nsec - b->tv_nsec);
 }
 
-/* Parse buffer limit from STREAM2_BUFFER_GB environment variable */
+/* Parse decoded-stack limit from STREAM2_BUFFER_GB (default_gb in gigabytes). */
 static inline uint64_t stream2_parse_buffer_limit_gb(uint64_t default_gb) {
     const char* env_limit = getenv("STREAM2_BUFFER_GB");
     if (env_limit && *env_limit) {
@@ -129,6 +129,28 @@ static inline uint64_t stream2_parse_buffer_limit_gb(uint64_t default_gb) {
         }
     }
     return default_gb * 1024ULL * 1024ULL * 1024ULL;
+}
+
+/*
+ * Wire buffer (as-received) cap. Uses STREAM2_WIRE_BUFFER_GB if set, otherwise
+ * the same rule as stream2_parse_buffer_limit_gb (STREAM2_BUFFER_GB / default).
+ */
+static inline uint64_t stream2_parse_wire_buffer_limit_gb(uint64_t default_gb) {
+    const char* env_limit = getenv("STREAM2_WIRE_BUFFER_GB");
+    if (env_limit && *env_limit) {
+        char* endp = NULL;
+        errno = 0;
+        unsigned long long gb = strtoull(env_limit, &endp, 10);
+        if (errno == 0 && endp && *endp == '\0' && gb > 0) {
+            return gb * 1024ULL * 1024ULL * 1024ULL;
+        } else {
+            fprintf(stderr,
+                    "WARN: STREAM2_WIRE_BUFFER_GB invalid, using "
+                    "STREAM2_BUFFER_GB / default %" PRIu64 "GB\n",
+                    default_gb);
+        }
+    }
+    return stream2_parse_buffer_limit_gb(default_gb);
 }
 
 #endif /* STREAM2_COMMON_H */

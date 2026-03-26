@@ -36,7 +36,8 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 | `src/stream2_common` | Clock, signals, shared helpers |
 | `src/stream2_stats` | Receive / throughput statistics |
 | `src/stream2_decompress` | Decompress image channels |
-| `src/stream2_image_buffer` | In-memory buffering, optional ZMQ zero-copy |
+| `src/stream2_image_buffer` | In-memory buffering as on the wire; optional ZMQ zero-copy |
+| `src/stream2_buffer_decode_stack` | Build a malloc-backed stack of decoded images (parallel decode); used by TIFF tools after receive |
 | `src/tiff_writer` | Write TIFF from buffered images (single- or multi-threaded flush) |
 
 ### Programs
@@ -44,15 +45,15 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 | Target | Description |
 |--------|-------------|
 | `stream2_dump` | Decode messages and print to stdout; useful to learn the protocol. |
-| `stream2_buffer` | Receive and buffer images, print stats; does not decompress for storage or write files. |
-| `stream2_buffer_decode` | Same as `stream2_buffer`, then a final pass to decompress and report compression ratios. |
-| `DectrisStream2Receiver_linux` | Buffer, decompress, write TIFFs; `--threads` sets writer threads (default 10). |
-| `acquire_and_save_stream` | Linux: **`-n` / `--images` COUNT** then save. **`--generate-flatfield`**: per-frame TIFFs **and** mean flatfield. **`--generate-flatfield-only`**: flatfield only. **`--flatfield-file PATH`**: flatfield destination. Default flatfield path under `--output` / `serie_*` if omitted. Auto channel: `image` → `data` → unnamed → most common non-mask. |
+| `stream2_buffer` | Receive and buffer images as on the wire, print stats; does not write files. |
+| `stream2_buffer_decode` | Same as `stream2_buffer`, plus a compression summary (decompress-on-read for stats). |
+| `DectrisStream2Receiver_linux` | Buffer as-received, then a pthread builds a decoded stack and writes TIFFs; `--threads` applies to decode and TIFF flush. |
+| `acquire_and_save_stream` | Linux: **`-n` / `--images` COUNT** then save. Progress on **stderr**: IMAGE message count (fast) vs **fifo decoded** subimage count and **decode backlog** (may trail under compression). **`--generate-flatfield`**: per-frame TIFFs **and** mean flatfield. **`--generate-flatfield-only`**: flatfield only. **`--flatfield-file PATH`**: flatfield destination. **`--threads`**: TIFF writers only (decode is a single FIFO pipeline). Auto channel: `image` → `data` → unnamed → most common non-mask. |
 | `stream2_bifurcator` | Relay: listen on one host/port, buffer, forward raw stream on another interface/port. |
 
 **Windows-only targets** (when building on Windows): `DectrisStream2Demo_windows`, `start_stream_eigerclient`.
 
-**Buffer cap:** programs that use the image buffer respect **`STREAM2_BUFFER_GB`** (default `20`).
+**Buffer caps (default 40 GiB each):** **`STREAM2_BUFFER_GB`** limits the **decoded** pixel stack used by `acquire_and_save_stream` and `DectrisStream2Receiver_linux` after receive. **`STREAM2_WIRE_BUFFER_GB`** limits the **as-received** buffer during streaming (if unset, falls back to `STREAM2_BUFFER_GB` / default). Tools that only buffer the wire (e.g. `stream2_buffer`, bifurcator) use the wire limit helper with the same env vars.
 
 **Linux receiver:** optional **`STREAM2_NET_IFACE`** selects the network interface for binding when applicable (see program help / source).
 

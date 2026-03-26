@@ -17,7 +17,8 @@
  *   stream2_bifurcator 192.168.1.100 192.168.2.1 31002
  *
  * Environment variables:
- *   STREAM2_BUFFER_GB      - Buffer limit in GB (default: 20)
+ *   STREAM2_BUFFER_GB      - Buffer limit in GB (default: 40) if STREAM2_WIRE_BUFFER_GB unset
+ *   STREAM2_WIRE_BUFFER_GB - As-received buffer cap in GB (optional)
  *   STREAM2_RCVBUF_MB      - Receive buffer size in MB (default: 256)
  *   STREAM2_SNDBUF_MB      - Send buffer size in MB (default: 256)
  *   STREAM2_CPU_AFFINITY   - CPU core to pin to (optional, Linux only)
@@ -242,7 +243,8 @@ int main(int argc, char** argv) {
                 "Example:\n"
                 "  %s 192.168.1.100 192.168.2.1 31002\n\n"
                 "Environment variables:\n"
-                "  STREAM2_BUFFER_GB    - Buffer limit in GB (default: 20)\n"
+                "  STREAM2_BUFFER_GB    - Buffer limit in GB (default: 40)\n"
+                "  STREAM2_WIRE_BUFFER_GB - Override wire buffer cap (GB)\n"
                 "  STREAM2_RCVBUF_MB    - Receive buffer MB (default: 256)\n"
                 "  STREAM2_SNDBUF_MB    - Send buffer MB (default: 256)\n"
                 "  STREAM2_CPU_AFFINITY - CPU core to pin to (optional)\n"
@@ -421,7 +423,7 @@ int main(int argc, char** argv) {
     struct bifurcator_stats stats;
     bifurcator_stats_init(&stats);
 
-    uint64_t buffer_limit = stream2_parse_buffer_limit_gb(20);
+    uint64_t buffer_limit = stream2_parse_wire_buffer_limit_gb(40);
     struct stream2_buffer_ctx buf;
     stream2_buffer_init(&buf, buffer_limit);
 

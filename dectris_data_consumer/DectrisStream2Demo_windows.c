@@ -805,7 +805,7 @@ int main(int argc, char** argv) {
         ctx.hRecvThreads[i] = NULL;
     }
 
-    ctx.bytes_limit = stream2_parse_buffer_limit_gb(20);
+    ctx.bytes_limit = stream2_parse_wire_buffer_limit_gb(40);
     /* Clamp buffer size for 32-bit builds to avoid exhausting address space */
     if (sizeof(void*) == 4) {
         const uint64_t clamp_bytes = 1500ULL * 1024ULL * 1024ULL; /* ~1.5 GB */

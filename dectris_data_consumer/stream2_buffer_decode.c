@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     struct stream2_stats s = {0};
     stream2_stats_init(&s);
 
-    uint64_t buffer_limit = stream2_parse_buffer_limit_gb(20);
+    uint64_t buffer_limit = stream2_parse_wire_buffer_limit_gb(40);
     struct stream2_buffer_ctx buf;
     stream2_buffer_init(&buf, buffer_limit);
 
@@ -188,5 +188,5 @@ int main(int argc, char** argv) {
     zmq_close(socket);
     zmq_ctx_term(ctx);
     stream2_buffer_free(&buf);
-    return EXIT_FAILURE;
+    return EXIT_SUCCESS;
 }

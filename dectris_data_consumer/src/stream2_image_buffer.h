@@ -26,7 +26,7 @@ struct stream2_buffered_image {
     const void* data;
     size_t data_size;
     struct stream2_msg_owner* owner; /* non-NULL when zero-copy frame retained */
-    char* compression_alg;           /* NULL if uncompressed */
+    char* compression_alg;           /* NULL if uncompressed on the wire */
     size_t compression_elem_size;
 };
 
@@ -46,7 +46,7 @@ void stream2_buffer_init(struct stream2_buffer_ctx* buf, uint64_t bytes_limit);
 /* Free all buffer contents */
 void stream2_buffer_free(struct stream2_buffer_ctx* buf);
 
-/* Buffer an image from multidim array data (with zero-copy support) */
+/* Buffer an image as received (compressed payloads stay compressed). */
 enum stream2_result stream2_buffer_image(
         const struct stream2_multidim_array* md,
         uint64_t image_id,

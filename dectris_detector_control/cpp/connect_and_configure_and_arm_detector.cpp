@@ -115,6 +115,7 @@ int main(int argc, char *argv[]) {
     // Usual settings for polychromatic beam
     dcu.setDetectorConfig("countrate_correction_applied", false);
     dcu.setDetectorConfig("retrigger", false);
+    dcu.setDetectorConfig("compression", "none"); //SIMPLON_APIReference_v3p8.pdf ->  To ensure highest stability at full frame rates, DECTRIS strongly advises using bslz4 compression.
     dcu.setDetectorConfig("counting_mode", "normal"); // see IMPORTANT: mode string, not "disabled"
     dcu.setDetectorConfig("flatfield_correction_applied", false);
     dcu.setDetectorConfig("virtual_pixel_correction_applied", true);

@@ -106,6 +106,8 @@ add_library(stream2_helpers STATIC
     src/stream2_decompress.h
     src/stream2_image_buffer.c
     src/stream2_image_buffer.h
+    src/stream2_buffer_decode_stack.c
+    src/stream2_buffer_decode_stack.h
     src/tiff_writer.c
     src/tiff_writer.h
     )
