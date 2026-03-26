@@ -1,13 +1,43 @@
 cmake_minimum_required(VERSION 3.11...3.31)
-project(stream2_example)
+project(stream2_example LANGUAGES C CXX)
 
-# Place build artifacts under bin/lib alongside the chosen build directory.
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+# Executables and this project's static libs go under dectris_data_consumer/bin and .../lib
+# (same layout as an in-source build), regardless of -B build directory.
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
 include(CheckCCompilerFlag)
 find_package(Threads REQUIRED)
+find_package(TIFF)
+if(NOT TIFF_FOUND)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PC_LIBTIFF QUIET libtiff-4)
+        if(NOT PC_LIBTIFF_FOUND)
+            pkg_check_modules(PC_LIBTIFF QUIET libtiff)
+        endif()
+        if(PC_LIBTIFF_FOUND)
+            set(TIFF_FOUND TRUE)
+            set(TIFF_LIBRARIES ${PC_LIBTIFF_LIBRARIES})
+            set(TIFF_INCLUDE_DIRS ${PC_LIBTIFF_INCLUDE_DIRS})
+        endif()
+    endif()
+endif()
+# FindTIFF / pkg-config often miss distro layouts; headers need libtiff-dev (not just libtiff6).
+if(NOT TIFF_FOUND)
+    find_path(TIFF_MANUAL_INCLUDE_DIR NAMES tiff.h)
+    find_library(TIFF_MANUAL_LIBRARY NAMES tiff libtiff libtiff5 tiffd libtiffd)
+    if(TIFF_MANUAL_INCLUDE_DIR AND TIFF_MANUAL_LIBRARY)
+        set(TIFF_FOUND TRUE)
+        if(NOT TARGET TIFF::TIFF)
+            add_library(TIFF::TIFF UNKNOWN IMPORTED)
+            set_target_properties(TIFF::TIFF PROPERTIES
+                IMPORTED_LOCATION "${TIFF_MANUAL_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${TIFF_MANUAL_INCLUDE_DIR}")
+        endif()
+    endif()
+endif()
 
 if(NOT WIN32)
     option(BUILD_LIBZMQ "Build ZeroMQ library from source" OFF)
@@ -139,6 +169,21 @@ endif()
 add_executable(stream2_bifurcator stream2_bifurcator.c)
 target_link_libraries(stream2_bifurcator stream2_helpers)
 
+if(TIFF_FOUND)
+    add_executable(data_analysis_pipeline_example data_analysis_pipeline_example.cpp)
+    target_compile_features(data_analysis_pipeline_example PRIVATE cxx_std_17)
+    if(TARGET TIFF::TIFF)
+        target_link_libraries(data_analysis_pipeline_example PRIVATE TIFF::TIFF)
+    else()
+        if(DEFINED TIFF_INCLUDE_DIRS AND TIFF_INCLUDE_DIRS)
+            target_include_directories(data_analysis_pipeline_example PRIVATE ${TIFF_INCLUDE_DIRS})
+        elseif(DEFINED TIFF_INCLUDE_DIR AND TIFF_INCLUDE_DIR)
+            target_include_directories(data_analysis_pipeline_example PRIVATE ${TIFF_INCLUDE_DIR})
+        endif()
+        target_link_libraries(data_analysis_pipeline_example PRIVATE ${TIFF_LIBRARIES})
+    endif()
+endif()
+
 if(WIN32)
     add_executable(DectrisStream2Demo_windows DectrisStream2Demo_windows.c)
     target_link_libraries(DectrisStream2Demo_windows
@@ -156,12 +201,20 @@ if(WIN32)
     )
 endif()
 
+if(NOT TIFF_FOUND)
+    message(WARNING
+        "LibTIFF not found: data_analysis_pipeline_example will not be built. "
+        "On Debian/Ubuntu install: sudo apt install libtiff-dev")
+endif()
+
 # Add clean-build target (works on all platforms, especially useful for Windows/Visual Studio)
 # Usage: cmake --build . --target clean-build
 # Note: For Makefile generators, 'make clean' already exists and works. This target
 # provides a way to clean everything including CMake cache files, binaries, and intermediate files.
 add_custom_target(clean-build
     COMMAND ${CMAKE_COMMAND} -E echo "Cleaning build artifacts..."
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_SOURCE_DIR}/bin
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_SOURCE_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/bin
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/CMakeFiles
