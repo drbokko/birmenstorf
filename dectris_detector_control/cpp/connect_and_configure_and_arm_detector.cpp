@@ -1,12 +1,12 @@
 /*
  * EIGER demo (part 1): configure the DCU and arm for acquisition. Does not send software trigger.
  *
- * Then `software_trigger_detector` (same HOST, matching -n), then `wait_idle_and_disarm_detector`.
+ * Then `send_software_trigger` (same HOST, matching -n), then `wait_idle_and_disarm_detector`.
  *
  * Workflow: connect; initialize; CONFIGURATION (IMPORTANT); housekeeping; stream/monitor/filewriter; arm.
- * Parts 2–3: software_trigger_detector, then wait_idle_and_disarm_detector. Stream consumer is separate.
+ * Parts 2–3: send_software_trigger, then wait_idle_and_disarm_detector. Stream consumer is separate.
  *
- * Disclaimer: ntrigger / nimages must match software_trigger_detector -n and your measurement.
+ * Disclaimer: ntrigger / nimages must match send_software_trigger -n and your measurement.
  */
 
 #include "eiger_session.hpp"
@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
         } else if (std::strcmp(argv[i], "--help") == 0) {
             std::printf("Usage: %s [--force-init] [HOST]\n"
                         "  Configure detector, stream (CBOR), then arm. No trigger.\n"
-                        "  Then: software_trigger_detector [-n N] [HOST], then wait_idle_and_disarm_detector [HOST].\n",
+                        "  Then: send_software_trigger [-n N] [HOST], then wait_idle_and_disarm_detector [HOST].\n",
                         argv[0]);
             return 0;
         } else if (argv[i][0] == '-') {
@@ -166,7 +166,7 @@ int main(int argc, char *argv[]) {
     dcu.setStreamConfig("header_detail", "all");
 
     // =============================================================================
-    // ARM (software trigger runs in software_trigger_detector)
+    // ARM (software trigger runs in send_software_trigger)
     // =============================================================================
     std::printf("Arming detector...\n");
     if (dcu.sendCommand("arm") != 0) {
@@ -174,7 +174,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    std::printf("Armed. Run: software_trigger_detector");
+    std::printf("Armed. Run: send_software_trigger");
     if (host != kDefaultHost)
         std::printf(" %s", host);
     std::printf(" -n %d", number_of_triggers);

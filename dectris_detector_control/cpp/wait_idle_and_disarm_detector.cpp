@@ -1,7 +1,7 @@
 /*
  * EIGER demo (part 3): poll detector state until idle, then disarm.
  *
- * Run after software_trigger_detector when acquisition should be finished.
+ * Run after send_software_trigger when acquisition should be finished.
  * Same DCU host as parts 1 and 2.
  */
 
@@ -30,7 +30,7 @@ int main(int argc, char *argv[]) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             std::printf("Usage: %s [HOST]\n"
                         "  Poll GET state until value is idle, then PUT disarm.\n"
-                        "  Run after software_trigger_detector when the run is complete.\n",
+                        "  Run after send_software_trigger when the run is complete.\n",
                         argv[0]);
             return 0;
         }

@@ -1,5 +1,5 @@
 /*
- * EIGER demo (part 2): send software trigger(s) to an already-armed detector only.
+ * EIGER demo (part 2) — send_software_trigger: send software trigger(s) to an already-armed detector only.
  *
  * Run after connect_and_configure_and_arm_detector (same DCU host). -n must match ntrigger.
  * After triggers complete, run wait_idle_and_disarm_detector (same HOST) to wait for idle and disarm.
