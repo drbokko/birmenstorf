@@ -15,24 +15,24 @@ The **DCU** is the **producer**: when **armed**, it publishes frames on Stream V
    ./connect_and_configure_and_arm_detector <dcu_ip_address>
    ```
 
-   Source: [`connect_and_configure_and_arm_detector.cpp`](dectris_detector_control/cpp/connect_and_configure_and_arm_detector.cpp). Set **`nimages`** / **`ntrigger`** in that source to match your plan (e.g. **1000** frames per trigger and enough **`ntrigger`** budget for the triggers you will send).
+   Source / CLI: [`connect_and_configure_and_arm_detector.cpp`](dectris_detector_control/cpp/connect_and_configure_and_arm_detector.cpp). Use **`--nimages`** and **`--ntrigger`** (defaults **1000** / **100000**) to match your plan (e.g. **1000** frames per trigger and enough **`ntrigger`** for the bursts you will send).
 
 3. **Generate a non-normalized flatfield** — Average **1000** stream frames into one **float32** TIFF (mean in detector units). Configure step 2 for **1000** **`nimages`** per trigger (and enough **`ntrigger`**). On the **receiver**, start the stream consumer **before** you trigger.
 
    From your **`dectris_data_consumer`** CMake build directory (e.g. `build/`, with `acquire_and_save_stream` on `PATH` or `./bin/acquire_and_save_stream`):
 
    ```sh
-   > ./acquire_and_save_stream <dcu_ip_address> -n 1000 --generate-flatfield-only --flatfield-file flatfield.tiff
+   > ./acquire_and_save_stream <dcu_ip_address> --nimages 1000 --generate-flatfield-only --flatfield-file flatfield.tiff
    ```
 
    Then trigger acquisition—for example **one** software trigger if each trigger emits 1000 frames—from **`dectris_detector_control`** (after `make`):
 
    ```sh
-   > ./send_software_trigger <dcu_ip_address> -n 1
+   > ./send_software_trigger <dcu_ip_address> --ntrigger 1
    ```
 
-   Code: [`acquire_and_save_stream.c`](dectris_data_consumer/acquire_and_save_stream.c), [`send_software_trigger.cpp`](dectris_detector_control/cpp/send_software_trigger.cpp). The trigger **`-n`** must stay consistent with **`ntrigger`** from step 2. When acquisition finishes, **`flatfield.tiff`** is at the **`--flatfield-file`** path.
+   Code: [`acquire_and_save_stream.c`](dectris_data_consumer/acquire_and_save_stream.c), [`send_software_trigger.cpp`](dectris_detector_control/cpp/send_software_trigger.cpp). **`--ntrigger`** must stay consistent with detector **`ntrigger`** from step 2; **`--nimages`** on the consumer should match frames per trigger when you need an exact frame count. When acquisition finishes, **`flatfield.tiff`** is at the **`--flatfield-file`** path.
 
-4. **Routine streaming** — Start your stream receiver (e.g. [`DectrisStream2Receiver_linux`](dectris_data_consumer/DectrisStream2Receiver_linux.c)), trigger as needed, and use **`wait_idle_and_disarm_detector`** when finishing the acquisition sequence (see [`dectris_detector_control`](dectris_detector_control/) README).
+4. **Routine streaming** — Start your stream receiver (e.g. [`DectrisStream2Receiver_linux`](dectris_data_consumer/DectrisStream2Receiver_linux.c)), trigger as needed, and use **`wait_idle_and_disarm_detector`** when finishing the acquisition sequence after idle. To **stop acquisition immediately** without waiting for idle, use **`disarm_detector`** (see [`dectris_detector_control`](dectris_detector_control/) README).
 
 ---

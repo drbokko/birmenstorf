@@ -1,7 +1,7 @@
 /*
  * acquire_and_save_stream.c — receive a fixed number of IMAGE messages, write TIFFs, optional flatfield TIFF
  *
- * Stops after -n / --images complete stream IMAGE messages. Images are buffered as on the wire while a
+ * Stops after --nimages stream IMAGE messages (legacy: -n / --images). Images are buffered as on the wire while a
  * background pthread FIFO-decodes into a second stack (see stream2_buffer_append_decoded_from_wire).
  * stderr shows recv IMAGE count vs decoded fifo depth (decode backlog may trail during heavy compression).
  * Flushes per-frame TIFFs like DectrisStream2Receiver_linux. Optional --generate-flatfield writes per-frame TIFFs plus
@@ -773,12 +773,14 @@ static enum stream2_result parse_msg(const uint8_t* msg_data,
 
 static void print_usage(const char* prog) {
     fprintf(stderr,
-            "usage: %s HOST -n COUNT | --images COUNT [options]\n",
+            "usage: %s HOST --nimages COUNT [options]\n",
             prog);
     fprintf(stderr,
             "  HOST                 DCU host (connects tcp://HOST:31001)\n");
     fprintf(stderr,
-            "  -n, --images COUNT  stop after this many IMAGE messages\n");
+            "  --nimages COUNT      stop after this many IMAGE messages\n");
+    fprintf(stderr,
+            "  (legacy: -n or --images, same meaning as --nimages)\n");
     fprintf(stderr,
             "  --threads M          TIFF writer threads (default 10); decode is pipelined FIFO\n");
     fprintf(stderr,
@@ -829,7 +831,8 @@ int main(int argc, char** argv) {
     host = argv[1];
 
     for (int i = 2; i < argc; i++) {
-        if (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--images") == 0) {
+        if (strcmp(argv[i], "--nimages") == 0 || strcmp(argv[i], "-n") == 0 ||
+            strcmp(argv[i], "--images") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "error: %s requires a count\n", argv[i]);
                 return EXIT_FAILURE;
@@ -837,7 +840,7 @@ int main(int argc, char** argv) {
             char* endp = NULL;
             unsigned long long n = strtoull(argv[i + 1], &endp, 10);
             if (!endp || *endp != '\0' || n == 0) {
-                fprintf(stderr, "error: image count must be a positive integer\n");
+                fprintf(stderr, "error: --nimages count must be a positive integer\n");
                 return EXIT_FAILURE;
             }
             target_frames = n;
@@ -883,7 +886,7 @@ int main(int argc, char** argv) {
     }
 
     if (target_frames == 0) {
-        fprintf(stderr, "error: -n or --images <count> is required\n");
+        fprintf(stderr, "error: --nimages <count> is required (legacy: -n or --images)\n");
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }

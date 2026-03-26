@@ -2,8 +2,9 @@
 # Usage: make
 #
 #   ./connect_and_configure_and_arm_detector [HOST]
-#   ./send_software_trigger [-n N] [HOST]
+#   ./send_software_trigger [--ntrigger N] [HOST]
 #   ./wait_idle_and_disarm_detector [HOST]
+#   ./disarm_detector [HOST]   # immediate disarm (abort; no idle wait)
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
@@ -14,7 +15,8 @@ EIGER_SRC = cpp/eiger_client.cpp
 
 TARGETS = connect_and_configure_and_arm_detector \
           send_software_trigger \
-          wait_idle_and_disarm_detector
+          wait_idle_and_disarm_detector \
+          disarm_detector
 
 ifeq ($(shell $(PKG_CONFIG) --exists libcurl 2>/dev/null && echo yes),yes)
   CPPFLAGS += -DUSE_LIBCURL=1
@@ -34,6 +36,9 @@ send_software_trigger: cpp/send_software_trigger.cpp $(EIGER_SRC)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
 
 wait_idle_and_disarm_detector: cpp/wait_idle_and_disarm_detector.cpp $(EIGER_SRC)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
+
+disarm_detector: cpp/disarm_detector.cpp $(EIGER_SRC)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDLIBS)
 
 clean:

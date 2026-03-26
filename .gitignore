@@ -2,6 +2,7 @@ simple_acquisition_with_stream2
 connect_and_configure_and_arm_detector
 send_software_trigger
 wait_idle_and_disarm_detector
+disarm_detector
 *__pycache__*
 
 # dectris_data_consumer CMake (out-of-tree build recommended)

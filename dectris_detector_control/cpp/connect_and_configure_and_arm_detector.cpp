@@ -1,12 +1,12 @@
 /*
  * EIGER demo (part 1): configure the DCU and arm for acquisition. Does not send software trigger.
  *
- * Then `send_software_trigger` (same HOST, matching -n), then `wait_idle_and_disarm_detector`.
+ * Then `send_software_trigger` (same HOST, matching --ntrigger), then `wait_idle_and_disarm_detector`.
  *
  * Workflow: connect; initialize; CONFIGURATION (IMPORTANT); housekeeping; stream/monitor/filewriter; arm.
  * Parts 2–3: send_software_trigger, then wait_idle_and_disarm_detector. Stream consumer is separate.
  *
- * Disclaimer: ntrigger / nimages must match send_software_trigger -n and your measurement.
+ * Disclaimer: detector ntrigger / nimages must match send_software_trigger --ntrigger and your plan.
  */
 
 #include "eiger_session.hpp"
@@ -46,14 +46,40 @@ int main(int argc, char *argv[]) {
     const char *const kDefaultHost = "169.254.254.1";
     const char *host = kDefaultHost;
     int force_initialization = 0; // Set via --force-init (always call initialize)
+    int number_of_images = 1000;
+    int number_of_triggers = 100000; // Can be stopped early with disarm
+
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--force-init") == 0) {
             force_initialization = 1;
+        } else if (std::strcmp(argv[i], "--nimages") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "--nimages requires a number\n");
+                return 1;
+            }
+            number_of_images = std::atoi(argv[++i]);
+            if (number_of_images < 1) {
+                std::fprintf(stderr, "--nimages must be >= 1\n");
+                return 1;
+            }
+        } else if (std::strcmp(argv[i], "--ntrigger") == 0) {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "--ntrigger requires a number\n");
+                return 1;
+            }
+            number_of_triggers = std::atoi(argv[++i]);
+            if (number_of_triggers < 1) {
+                std::fprintf(stderr, "--ntrigger must be >= 1\n");
+                return 1;
+            }
         } else if (std::strcmp(argv[i], "--help") == 0) {
-            std::printf("Usage: %s [--force-init] [HOST]\n"
-                        "  Configure detector, stream (CBOR), then arm. No trigger.\n"
-                        "  Then: send_software_trigger [-n N] [HOST], then wait_idle_and_disarm_detector [HOST].\n",
-                        argv[0]);
+            std::printf(
+                    "Usage: %s [--nimages N] [--ntrigger M] [--force-init] [HOST]\n"
+                    "  Configure detector (nimages / ntrigger), stream (CBOR), then arm. No trigger.\n"
+                    "  Defaults: --nimages 1000 --ntrigger 100000\n"
+                    "  Then: send_software_trigger [--ntrigger M] [HOST], then wait_idle_and_disarm_detector [HOST].\n"
+                    "  Match send_software_trigger --ntrigger to the configured ntrigger (M here).\n",
+                    argv[0]);
             return 0;
         } else if (argv[i][0] == '-') {
             std::fprintf(stderr, "Unknown option: %s (try --help)\n", argv[i]);
@@ -64,8 +90,6 @@ int main(int argc, char *argv[]) {
     }
     const int kPort = 80;
     const int threshold_ev = 15000;
-    const int number_of_images = 1000;
-    const int number_of_triggers = 100000; // Acquisition sequence can be stopped any time with the "disarm" command
     const double exposure_time = 1.0 / 1000.0; // Count time per image [s] (e.g. 1/fps)
     const double sleep_time = 0.0; // Extra delay per frame [s]; frame_time = exposure + sleep
 
@@ -178,7 +202,7 @@ int main(int argc, char *argv[]) {
     std::printf("Armed. Run: send_software_trigger");
     if (host != kDefaultHost)
         std::printf(" %s", host);
-    std::printf(" -n %d", number_of_triggers);
+    std::printf(" --ntrigger %d", number_of_triggers);
     std::printf("  then: wait_idle_and_disarm_detector");
     if (host != kDefaultHost)
         std::printf(" %s", host);

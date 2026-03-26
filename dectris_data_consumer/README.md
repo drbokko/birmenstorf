@@ -48,7 +48,7 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 | `stream2_buffer` | Receive and buffer images as on the wire, print stats; does not write files. |
 | `stream2_buffer_decode` | Same as `stream2_buffer`, plus a compression summary (decompress-on-read for stats). |
 | `DectrisStream2Receiver_linux` | Buffer as-received, then a pthread builds a decoded stack and writes TIFFs; `--threads` applies to decode and TIFF flush. |
-| `acquire_and_save_stream` | Linux: **`-n` / `--images` COUNT** then save. Progress on **stderr**: IMAGE message count (fast) vs **fifo decoded** subimage count and **decode backlog** (may trail under compression). **`--generate-flatfield`**: per-frame TIFFs **and** mean flatfield. **`--generate-flatfield-only`**: flatfield only. **`--flatfield-file PATH`**: flatfield destination. **`--threads`**: TIFF writers only (decode is a single FIFO pipeline). Auto channel: `image` → `data` → unnamed → most common non-mask. |
+| `acquire_and_save_stream` | Linux: **`--nimages` COUNT** then save (legacy **`-n`** / **`--images`**). Progress on **stderr**: IMAGE message count (fast) vs **fifo decoded** subimage count and **decode backlog** (may trail under compression). **`--generate-flatfield`**: per-frame TIFFs **and** mean flatfield. **`--generate-flatfield-only`**: flatfield only. **`--flatfield-file PATH`**: flatfield destination. **`--threads`**: TIFF writers only (decode is a single FIFO pipeline). Auto channel: `image` → `data` → unnamed → most common non-mask. |
 | `stream2_bifurcator` | Relay: listen on one host/port, buffer, forward raw stream on another interface/port. |
 
 **Windows-only targets** (when building on Windows): `DectrisStream2Demo_windows`, `start_stream_eigerclient`.
