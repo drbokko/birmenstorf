@@ -53,6 +53,31 @@ CMake builds static targets **`stream2`** (parser) and **`stream2_helpers`** (li
 
 **Windows-only targets** (when building on Windows): `DectrisStream2Demo_windows`, `start_stream_eigerclient`.
 
+### Offline normalization and inpainting (OpenCV)
+
+Two optional **C++** tools are built when CMake finds **OpenCV** with **core**, **imgcodecs**, **imgproc**, and **photo** (on Debian/Ubuntu: `libopencv-dev`). Binaries are written to **`dectris_data_consumer/bin/`** (see CMake output directory settings).
+
+**Order in a simple pipeline:** run **`normalize_images`** first on raw or exported TIFF stacks, then **`inpaint_tiff`** on that output. Inpainting expects normalized float TIFFs (e.g. after flat-field correction), not raw detector frames.
+
+**`normalize_images`** loads one **flat-field** TIFF and every `.tif` / `.tiff` in an input folder. For each frame it computes a transmission-style image: `object / (flat + epsilon)` (default `epsilon` is `1e-6` to avoid division by zero). Results are written as float TIFFs under the output directory (`--out`). Use **`--epsilon`** if you need a different floor on the denominator.
+
+**`inpaint_tiff`** takes a **mask** TIFF (single channel): mask value **0** means a good pixel (unchanged); any **positive** mask value marks a bad pixel to inpaint. It supports folder batch mode (`--in` / `--out`), radius, NaN handling, algorithm (`telea` or `ns`), and optional noise on inpainted pixels (`--inpaint-noise-scale`). See **`--help`** in the tool for the full option list.
+
+Examples (adjust paths to your tree; here **`example_dataset/`** holds flat field, originals, mask, and created **`normalized/`** and **`inpainted/`** folders):
+
+```sh
+./dectris_data_consumer/bin/normalize_images \
+  --in example_dataset/original/ \
+  --flat example_dataset/flatfield.tiff \
+  --out example_dataset/normalized/
+
+./dectris_data_consumer/bin/inpaint_tiff \
+  --mask example_dataset/bad_pixel_mask.tiff \
+  --in example_dataset/normalized/ \
+  --out example_dataset/inpainted/ \
+  --inpaint-noise-scale 1.0 --radius 3 --nan-fill 1.0 --algorithm ns
+```
+
 **Buffer caps (default 40 GiB each):** **`STREAM2_BUFFER_GB`** limits the **decoded** pixel stack used by `acquire_and_save_stream` and `DectrisStream2Receiver_linux` after receive. **`STREAM2_WIRE_BUFFER_GB`** limits the **as-received** buffer during streaming (if unset, falls back to `STREAM2_BUFFER_GB` / default). Tools that only buffer the wire (e.g. `stream2_buffer`, bifurcator) use the wire limit helper with the same env vars.
 
 **Linux receiver:** optional **`STREAM2_NET_IFACE`** selects the network interface for binding when applicable (see program help / source).
