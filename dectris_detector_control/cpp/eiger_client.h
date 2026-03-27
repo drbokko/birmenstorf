@@ -1,7 +1,7 @@
 /*
  * eiger_client.h - EIGER detector REST API (C ABI; implemented in eiger_client.cpp)
  *
- * Covers the functionalities used by start_stream_eigerclient:
+ * Covers detector session operations such as:
  * - GET status (state, temperature, humidity, high_voltage, config, etc.)
  * - PUT detector commands (disarm, initialize, arm, trigger)
  * - PUT detector / stream / monitor / filewriter config

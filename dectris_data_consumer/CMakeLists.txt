@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.11...3.31)
 project(stream2_example LANGUAGES C CXX)
 
+option(DECTRIS_USE_BUNDLED_LIBTIFF "Build libtiff from third_party/libtiff (git submodule)" ON)
+
 # Executables and this project's static libs go under dectris_data_consumer/bin and .../lib
 # (same layout as an in-source build), regardless of -B build directory.
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib")
@@ -9,37 +11,32 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
 include(CheckCCompilerFlag)
 find_package(Threads REQUIRED)
-find_package(TIFF)
-if(NOT TIFF_FOUND)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(PC_LIBTIFF QUIET libtiff-4)
-        if(NOT PC_LIBTIFF_FOUND)
-            pkg_check_modules(PC_LIBTIFF QUIET libtiff)
-        endif()
-        if(PC_LIBTIFF_FOUND)
-            set(TIFF_FOUND TRUE)
-            set(TIFF_LIBRARIES ${PC_LIBTIFF_LIBRARIES})
-            set(TIFF_INCLUDE_DIRS ${PC_LIBTIFF_INCLUDE_DIRS})
-        endif()
-    endif()
-endif()
-# FindTIFF / pkg-config often miss distro layouts; headers need libtiff-dev (not just libtiff6).
-if(NOT TIFF_FOUND)
-    find_path(TIFF_MANUAL_INCLUDE_DIR NAMES tiff.h)
-    find_library(TIFF_MANUAL_LIBRARY NAMES tiff libtiff libtiff5 tiffd libtiffd)
-    if(TIFF_MANUAL_INCLUDE_DIR AND TIFF_MANUAL_LIBRARY)
-        set(TIFF_FOUND TRUE)
-        if(NOT TARGET TIFF::TIFF)
-            add_library(TIFF::TIFF UNKNOWN IMPORTED)
-            set_target_properties(TIFF::TIFF PROPERTIES
-                IMPORTED_LOCATION "${TIFF_MANUAL_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES "${TIFF_MANUAL_INCLUDE_DIR}")
-        endif()
+
+# OpenCV must find OpenCVConfig.cmake. On Windows CMake does not guess the install path: set
+# OpenCV_DIR to the directory that contains that file (official pack: often .../build or
+# .../build/x64/vc16 - match your MSVC version). Environment variable OpenCV_DIR is picked up here
+# if the cache entry is empty (setx does not apply to the shell you run cmake from).
+if(NOT OpenCV_DIR)
+    if(DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{OpenCV_DIR}" _dectris_opencv_dir_env)
+        set(OpenCV_DIR "${_dectris_opencv_dir_env}" CACHE PATH "Directory containing OpenCVConfig.cmake")
     endif()
 endif()
 
 find_package(OpenCV QUIET COMPONENTS core imgcodecs imgproc photo)
+
+# Official Windows pack: OpenCVConfig.cmake often lives under build/x64/vcNN, not build/.
+if(NOT OpenCV_FOUND AND OpenCV_DIR AND EXISTS "${OpenCV_DIR}" AND NOT EXISTS "${OpenCV_DIR}/OpenCVConfig.cmake")
+    file(GLOB _dectris_opencv_cfgs "${OpenCV_DIR}/x64/vc*/OpenCVConfig.cmake")
+    if(_dectris_opencv_cfgs)
+        list(SORT _dectris_opencv_cfgs ORDER DESCENDING)
+        list(GET _dectris_opencv_cfgs 0 _dectris_opencv_cfg)
+        get_filename_component(_dectris_opencv_sub "${_dectris_opencv_cfg}" DIRECTORY)
+        message(STATUS "OpenCV: using ${_dectris_opencv_sub} (OpenCVConfig.cmake under build/x64/vc*)")
+        set(OpenCV_DIR "${_dectris_opencv_sub}" CACHE PATH "Directory containing OpenCVConfig.cmake" FORCE)
+        find_package(OpenCV QUIET COMPONENTS core imgcodecs imgproc photo)
+    endif()
+endif()
 
 if(NOT WIN32)
     option(BUILD_LIBZMQ "Build ZeroMQ library from source" OFF)
@@ -103,6 +100,46 @@ endif()
 
 add_subdirectory(third_party EXCLUDE_FROM_ALL)
 
+set(TIFF_FOUND FALSE)
+if(TARGET TIFF::TIFF)
+    set(TIFF_FOUND TRUE)
+elseif(DECTRIS_USE_BUNDLED_LIBTIFF)
+    message(WARNING
+        "Bundled libtiff requested but target TIFF::TIFF is missing. "
+        "Initialize the submodule: git submodule update --init dectris_data_consumer/third_party/libtiff")
+endif()
+if(NOT TIFF_FOUND)
+    find_package(TIFF)
+    if(NOT TIFF_FOUND)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(PC_LIBTIFF QUIET libtiff-4)
+            if(NOT PC_LIBTIFF_FOUND)
+                pkg_check_modules(PC_LIBTIFF QUIET libtiff)
+            endif()
+            if(PC_LIBTIFF_FOUND)
+                set(TIFF_FOUND TRUE)
+                set(TIFF_LIBRARIES ${PC_LIBTIFF_LIBRARIES})
+                set(TIFF_INCLUDE_DIRS ${PC_LIBTIFF_INCLUDE_DIRS})
+            endif()
+        endif()
+    endif()
+    # FindTIFF / pkg-config often miss distro layouts; headers need libtiff-dev (not just libtiff6).
+    if(NOT TIFF_FOUND)
+        find_path(TIFF_MANUAL_INCLUDE_DIR NAMES tiff.h)
+        find_library(TIFF_MANUAL_LIBRARY NAMES tiff libtiff libtiff5 tiffd libtiffd)
+        if(TIFF_MANUAL_INCLUDE_DIR AND TIFF_MANUAL_LIBRARY)
+            set(TIFF_FOUND TRUE)
+            if(NOT TARGET TIFF::TIFF)
+                add_library(TIFF::TIFF UNKNOWN IMPORTED)
+                set_target_properties(TIFF::TIFF PROPERTIES
+                    IMPORTED_LOCATION "${TIFF_MANUAL_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${TIFF_MANUAL_INCLUDE_DIR}")
+            endif()
+        endif()
+    endif()
+endif()
+
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -160,10 +197,10 @@ target_link_libraries(stream2_buffer stream2_helpers)
 add_executable(stream2_buffer_decode stream2_buffer_decode.c)
 target_link_libraries(stream2_buffer_decode stream2_helpers)
 
-add_executable(DectrisStream2Receiver_linux DectrisStream2Receiver_linux.c)
-target_link_libraries(DectrisStream2Receiver_linux stream2_helpers)
-
+# Linux-only (pthread): skip on Windows â€” use DectrisStream2Demo_windows or WSL for similar workflows.
 if(NOT WIN32)
+    add_executable(DectrisStream2Receiver_linux DectrisStream2Receiver_linux.c)
+    target_link_libraries(DectrisStream2Receiver_linux stream2_helpers)
     add_executable(acquire_and_save_stream acquire_and_save_stream.c)
     target_link_libraries(acquire_and_save_stream stream2_helpers)
 endif()
@@ -230,23 +267,28 @@ if(WIN32)
         iphlpapi
         ws2_32
     )
-    
-    add_executable(start_stream_eigerclient start_stream_eigerclient.c)
-    target_link_libraries(start_stream_eigerclient
-        winhttp
-    )
 endif()
 
 if(NOT TIFF_FOUND)
     message(WARNING
         "LibTIFF not found: data_analysis_pipeline_example and average_images will not be built. "
-        "On Debian/Ubuntu install: sudo apt install libtiff-dev")
+        "Use the third_party/libtiff submodule (git submodule update --init) or "
+        "on Debian/Ubuntu: sudo apt install libtiff-dev")
 endif()
 
 if(NOT OpenCV_FOUND)
-    message(WARNING
-        "OpenCV (core, imgcodecs, imgproc, photo) not found: normalize_images and inpaint_tiff "
-        "will not be built. On Debian/Ubuntu install: sudo apt install libopencv-dev")
+    if(WIN32)
+        message(WARNING
+            "OpenCV (core, imgcodecs, imgproc, photo) not found: normalize_images and inpaint_tiff "
+            "will not be built. Pass the folder that contains OpenCVConfig.cmake, e.g. "
+            "cmake -DOpenCV_DIR=C:/path/to/opencv/build/x64/vc17 (vc* must match your VS). "
+            "Or set OpenCV_DIR for this PowerShell session: $env:OpenCV_DIR='C:\\...'; cmake ... "
+            "(setx does not affect the current window). With vcpkg, use that toolchain file and install opencv4. If OpenCV_DIR was wrong before, clear it: cmake -U OpenCV_DIR -B <builddir> -S .")
+    else()
+        message(WARNING
+            "OpenCV (core, imgcodecs, imgproc, photo) not found: normalize_images and inpaint_tiff "
+            "will not be built. On Debian/Ubuntu: sudo apt install libopencv-dev")
+    endif()
 endif()
 
 # Add clean-build target (works on all platforms, especially useful for Windows/Visual Studio)

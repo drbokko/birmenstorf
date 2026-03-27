@@ -4,3 +4,6 @@
 [submodule "dectris_data_consumer/third_party/tinycbor"]
 	path = dectris_data_consumer/third_party/tinycbor
 	url = https://github.com/intel/tinycbor
+[submodule "dectris_data_consumer/third_party/libtiff"]
+	path = dectris_data_consumer/third_party/libtiff
+	url = https://gitlab.com/libtiff/libtiff.git

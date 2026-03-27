@@ -142,12 +142,17 @@ Set **`BUILD_LIBZMQ=YES`** to fetch and build ZeroMQ from source; otherwise CMak
 
 ### Build — Windows
 
-Open a **Visual Studio** developer shell (adjust the path to match your install), then:
+**OpenCV** (for `normalize_images` / `inpaint_tiff`): CMake must find **OpenCVConfig.cmake**. With the [official Windows pack](https://docs.opencv.org/4.x/d3/d52/tutorial_windows_install.html), that file is usually under `opencv\build` or `opencv\build\x64\vc17` (use the **vc*** folder that matches your Visual Studio). You can pass `-DOpenCV_DIR=...` on the configure line, or set `$env:OpenCV_DIR='...'` in the same PowerShell session (**`setx` does not affect the current window**). If you point **OpenCV_DIR** at the top **build** folder only, this project will also search **build/x64/vc*** and pick the newest match.
+
+With **vcpkg**: install `opencv4[core,imgcodecs,imgproc,photo]:x64-windows` and pass `-DCMAKE_TOOLCHAIN_FILE=.../vcpkg/scripts/buildsystems/vcpkg.cmake` so `find_package(OpenCV)` works without **OpenCV_DIR**.
+
+Open a **Visual Studio** developer shell (adjust paths), then:
 
 ```powershell
 cd dectris_data_consumer
-cmake . -DCMAKE_BUILD_TYPE=Debug -DBUILD_LIBZMQ=YES
-cmake --build .
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DBUILD_LIBZMQ=ON `
+  -DOpenCV_DIR="C:\path\to\opencv\build\x64\vc17"
+cmake --build build --config Debug
 ```
 
 ### Cleaning
