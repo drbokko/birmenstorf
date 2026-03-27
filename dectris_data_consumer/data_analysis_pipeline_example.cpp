@@ -14,6 +14,8 @@
 
 #include <tiffio.h>
 
+#include "tiff_warning_filter.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -176,6 +178,7 @@ static void print_usage(const char* prog) {
 }
 
 int main(int argc, char** argv) {
+    dectris::install_libtiff_warning_filter();
     if (argc != 3) {
         print_usage(argv[0]);
         return EXIT_FAILURE;

@@ -39,6 +39,8 @@ if(NOT TIFF_FOUND)
     endif()
 endif()
 
+find_package(OpenCV QUIET COMPONENTS core imgcodecs imgproc photo)
+
 if(NOT WIN32)
     option(BUILD_LIBZMQ "Build ZeroMQ library from source" OFF)
 else()
@@ -169,18 +171,52 @@ endif()
 add_executable(stream2_bifurcator stream2_bifurcator.c)
 target_link_libraries(stream2_bifurcator stream2_helpers)
 
-if(TIFF_FOUND)
-    add_executable(data_analysis_pipeline_example data_analysis_pipeline_example.cpp)
-    target_compile_features(data_analysis_pipeline_example PRIVATE cxx_std_17)
+macro(dectris_link_libtiff _name)
+    target_compile_features(${_name} PRIVATE cxx_std_17)
     if(TARGET TIFF::TIFF)
-        target_link_libraries(data_analysis_pipeline_example PRIVATE TIFF::TIFF)
+        target_link_libraries(${_name} PRIVATE TIFF::TIFF)
     else()
         if(DEFINED TIFF_INCLUDE_DIRS AND TIFF_INCLUDE_DIRS)
-            target_include_directories(data_analysis_pipeline_example PRIVATE ${TIFF_INCLUDE_DIRS})
+            target_include_directories(${_name} PRIVATE ${TIFF_INCLUDE_DIRS})
         elseif(DEFINED TIFF_INCLUDE_DIR AND TIFF_INCLUDE_DIR)
-            target_include_directories(data_analysis_pipeline_example PRIVATE ${TIFF_INCLUDE_DIR})
+            target_include_directories(${_name} PRIVATE ${TIFF_INCLUDE_DIR})
         endif()
-        target_link_libraries(data_analysis_pipeline_example PRIVATE ${TIFF_LIBRARIES})
+        target_link_libraries(${_name} PRIVATE ${TIFF_LIBRARIES})
+    endif()
+endmacro()
+
+if(TIFF_FOUND)
+    set(DECTRIS_LIBTIFF_WARNING_FILTER src/tiff_warning_filter.cpp)
+    add_executable(data_analysis_pipeline_example
+        data_analysis_pipeline_example.cpp
+        ${DECTRIS_LIBTIFF_WARNING_FILTER})
+    dectris_link_libtiff(data_analysis_pipeline_example)
+    add_executable(average_images
+        average_images.cpp
+        ${DECTRIS_LIBTIFF_WARNING_FILTER})
+    dectris_link_libtiff(average_images)
+endif()
+
+if(OpenCV_FOUND)
+    add_executable(normalize_images normalize_images.cpp)
+    target_compile_features(normalize_images PRIVATE cxx_std_17)
+    if(TARGET opencv_core AND TARGET opencv_imgcodecs AND TARGET opencv_imgproc)
+        target_link_libraries(normalize_images PRIVATE
+            opencv_core opencv_imgcodecs opencv_imgproc)
+    else()
+        target_include_directories(normalize_images PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_libraries(normalize_images PRIVATE ${OpenCV_LIBS})
+    endif()
+
+    add_executable(inpaint_tiff inpaint_images.cpp)
+    target_compile_features(inpaint_tiff PRIVATE cxx_std_17)
+    if(TARGET opencv_core AND TARGET opencv_imgcodecs AND TARGET opencv_imgproc
+            AND TARGET opencv_photo)
+        target_link_libraries(inpaint_tiff PRIVATE
+            opencv_core opencv_imgcodecs opencv_imgproc opencv_photo)
+    else()
+        target_include_directories(inpaint_tiff PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_libraries(inpaint_tiff PRIVATE ${OpenCV_LIBS})
     endif()
 endif()
 
@@ -203,8 +239,14 @@ endif()
 
 if(NOT TIFF_FOUND)
     message(WARNING
-        "LibTIFF not found: data_analysis_pipeline_example will not be built. "
+        "LibTIFF not found: data_analysis_pipeline_example and average_images will not be built. "
         "On Debian/Ubuntu install: sudo apt install libtiff-dev")
+endif()
+
+if(NOT OpenCV_FOUND)
+    message(WARNING
+        "OpenCV (core, imgcodecs, imgproc, photo) not found: normalize_images and inpaint_tiff "
+        "will not be built. On Debian/Ubuntu install: sudo apt install libopencv-dev")
 endif()
 
 # Add clean-build target (works on all platforms, especially useful for Windows/Visual Studio)
