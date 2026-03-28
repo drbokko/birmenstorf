@@ -53,15 +53,15 @@ flowchart TD
 ```
 ## Example 1 - A Simple Acquisition and Analysis Pipeline
 
-We start the stream consumer before** the detector emits frames you care about, i.e. before the **trigger** signal is sent. Whe the trigger is sent, the detector starts acquiring and streaming immediately. If the consumer starts late, the first frames of a burst can be lost.
+We start the stream consumer before the detector emits frames you care about, i.e. before the **trigger** signal is sent. Whe the trigger is sent, the detector starts acquiring and streaming immediately. If the consumer starts late, the first frames of a burst can be lost.
 
 The trigger is send via software (```"ints"```), but the detector also be triggered via a hardware signal on the **Lemo** connector in the back of the detector (more information in the manual).
 
 We firts first acquire the **Flatfield**, process the data, and apply the flatfield for the normalization of the data acquires in the following steps.
 
-The datasets are processed ```average_images```, ```normalize_images```and ```inpaint_images``` ** on raw (or exported) object frames. 
+The datasets are processed ```average_images```, ```normalize_images```and ```inpaint_images```  on raw (or exported) object frames. 
 
-The bad pixel mask uses **0** = good pixel, **any positive value** = inpaint.
+The bad pixel mask format uses **0** for good pixel, **any positive value** = inpaint.
 
 ### A - Prepare the Data Acquisition and Configure the Detector
 Configure the acquisition. The script will configure the image interface, threshold energy, count_time, number_of_trigger, number_of_images. 
@@ -74,13 +74,14 @@ The default setting in the programm are the following:
 - Number of Triggers: 100000
 - Number of Images (per trigger): 10000
 - Trigger Mode: ```ints```
+
 Change the code and recompile for different values. 
 
 ### B - Acquire Flatfield
 Remove the object under test, and acquire 200-1000 images with an exposure time such that each pixels has > 1000 counts/pixel. 
 1. Start the stream receiver ```./bin/acquire_and_save_stream  <dcu_ip_address> --nimages 1000 --output ./my_ff_data```
 1. Trigger the detector ```./bin/send_software_trigger <dcu_ip_address>```
-1. Average the images to generate the flatfield.tiff ```./bin/average_images ./my_ff_data flatfield.tiff```
+1. Average the images to generate the flatfield.tiff ```./bin/average_images ./my_ff_data my_flatfield.tiff```
 
 ### C - Acquire and Preprocess
 Acquire a dataset with images from your object, normalize them to the flatfield and pre-process them, interpolating the missing infomation from the gaps and the bad pixels map.
@@ -98,11 +99,9 @@ If you need to restart the process, begin again from **Part A**
 
 ## Example 2 - A Continuous Pipeline
 
-
 ## Example 3 - Object / routine acquisition
 
 Run your stream receiver (**`./bin/DectrisStream2Receiver_linux`**, **`./bin/acquire_and_save_stream`**, or **`./bin/stream2_generic_receiver`** in the appropriate mode) **before** triggers, and save object data to a folder of TIFFs. Use **`wait_idle_and_disarm_detector`** when you finish a clean run.
-
 
 ## Available Executables (summary)
 
