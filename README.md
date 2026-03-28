@@ -1,38 +1,232 @@
-# DECTRIS Stream V2 — Consumer and producer 
+# Birmenstorf — DECTRIS Stream V2 acquisition and offline processing
 
+This repository is a **workstation-side** toolkit for **DECTRIS EIGER** setups: you drive the **DCU** over **REST (Simplon)** and **consume Stream V2** (CBOR over ZeroMQ) to save TIFF stacks. The **main story** below is an end-to-end **measurement and correction** flow:
 
-## Producer and consumer
+1. **Acquire a flat-field series** from the stream (or average saved frames).
+2. **Produce one flat-field reference** (mean image).
+3. **Normalize** object frames with that flat field.
+4. **Inpaint** bad pixels or gaps using a **mask** TIFF.
 
-The **DCU** is the **producer**: when **armed**, it publishes frames on Stream V2 at `tcp://<dcu>:31001`. Your workstation runs **consumers** that **PULL** that stream, decode CBOR, and save or process images. REST programs such as [`connect_and_configure_and_arm_detector`](dectris_detector_control/cpp/connect_and_configure_and_arm_detector.cpp) and [`send_software_trigger`](dectris_detector_control/cpp/send_software_trigger.cpp) control acquisition; tools **here**—[`acquire_and_save_stream`](dectris_data_consumer/acquire_and_save_stream.c), [`DectrisStream2Receiver_linux`](dectris_data_consumer/DectrisStream2Receiver_linux.c), etc.—receive the stream. **Start the stream receiver before frames are emitted** whenever you must not lose data.
-
-## Sample workflow (tools in this repo)
-
-1. **Workstation and DCU** — Power on chiller and detector, confirm cooling, and network connections.
-2. **Configure and arm** — Build and run the producer tool (see [`dectris_detector_control`](dectris_detector_control/) Makefile):
-
-   ```sh
-   cd dectris_detector_control && make
-   ./connect_and_configure_and_arm_detector <dcu_ip_address>
-   ```
-
-   Source / CLI: [`connect_and_configure_and_arm_detector.cpp`](dectris_detector_control/cpp/connect_and_configure_and_arm_detector.cpp). Use **`--nimages`** and **`--ntrigger`** (defaults **1000** / **100000**) to match your plan (e.g. **1000** frames per trigger and enough **`ntrigger`** for the bursts you will send).
-
-3. **Generate a non-normalized flatfield** — Average **1000** stream frames into one **float32** TIFF (mean in detector units). Configure step 2 for **1000** **`nimages`** per trigger (and enough **`ntrigger`**). On the **receiver**, start the stream consumer **before** you trigger.
-
-   From your **`dectris_data_consumer`** CMake build directory (e.g. `build/`, with `acquire_and_save_stream` on `PATH` or `./bin/acquire_and_save_stream`):
-
-   ```sh
-   > ./acquire_and_save_stream <dcu_ip_address> --nimages 1000 --generate-flatfield-only --flatfield-file flatfield.tiff
-   ```
-
-   Then trigger acquisition—for example **one** software trigger if each trigger emits 1000 frames—from **`dectris_detector_control`** (after `make`):
-
-   ```sh
-   > ./send_software_trigger <dcu_ip_address> --ntrigger 1
-   ```
-
-   Code: [`acquire_and_save_stream.c`](dectris_data_consumer/acquire_and_save_stream.c), [`send_software_trigger.cpp`](dectris_detector_control/cpp/send_software_trigger.cpp). **`--ntrigger`** must stay consistent with detector **`ntrigger`** from step 2; **`--nimages`** on the consumer should match frames per trigger when you need an exact frame count. When acquisition finishes, **`flatfield.tiff`** is at the **`--flatfield-file`** path.
-
-4. **Routine streaming** — Start your stream receiver (e.g. [`DectrisStream2Receiver_linux`](dectris_data_consumer/DectrisStream2Receiver_linux.c)), trigger as needed, and use **`wait_idle_and_disarm_detector`** when finishing the acquisition sequence after idle. To **stop acquisition immediately** without waiting for idle, use **`disarm_detector`** (see [`dectris_detector_control`](dectris_detector_control/) README).
+The DCU is the **producer** of stream data; programs here are **consumers** (stream + disk) and **control clients** (HTTP only—they never parse the stream themselves).
 
 ---
+
+## End-to-end pipeline (flat field → normalize → inpaint)
+A block diagram of a simple image pipeline using the tools given in this repository is described below:
+```mermaid
+flowchart TD
+
+  subgraph stream [Dectector System]
+    DCU[DCU Stream V2 tcp://DCU:31001]
+    REC[Consumer: acquire_and_save_stream]
+    DCU -->|Stream2 CBOR| REC
+  end
+  
+  API[SIMPLON API Configure/Arm/Trigger/Disarm]
+  API --> DCU
+
+  subgraph obj [Record Images]
+    REC --> DIR_RAW[Folder of raw TIFFs]     
+  end
+  
+  DIR_RAW -->|Without Object| AVG[./average_images]
+
+  subgraph flat [Calculate Flatfield]
+    AVG --> FF[flatfield.tiff]
+  end
+
+  FF --> NORM[./normalize_images]
+  DIR_RAW -->|With Object| NORM
+
+  subgraph norm [Normalize Images to Flatfield]
+    NORM --> NOUT[Normalized Images]
+  end
+  
+  MASK[bad_pixel_mask.tiff] --> INP[./inpaint_images]
+  NOUT --> INP
+  
+  subgraph inpaint [Inpainting - Missing Pixels and Gaps Interpolation]
+    INP --> FINAL[Inpainted Images]
+  end
+
+  FINAL --> RESULT[Preprocessed Images]
+```
+## A Simple Acquisition and Analysis Example
+In the following example we'll process Images Offline, running ```average_images```, ```normalize_images```and ```inpaint_images``` ** on raw (or exported) object frames. The mask uses **0** = good pixel, **any positive value** = inpaint.
+
+We start the stream consumer before** the detector emits frames you care about, i.e. before the **trigger** signal is sent. Whe the trigger is sent, the detector starts acquiring and streaming immediately. If the consumer starts late, the first frames of a burst can be lost.
+
+The trigger is send via software (```"ints"```), but the detector also be triggered via a hardware signal on the **Lemo** connector in the back of the detector (more information in the manual).
+
+### A - Prepare the Data Acquisition and Configure the Detector
+1. Configure the acquisition. The script will configure the image interface, threshold energy, count_time, number_of_trigger, number_of_images. 
+``` ./bin/connect_and_configure_and_arm_detector <dcu_ip_address>```
+
+### B - Acquire Flatfield
+Remove the object under test, and acquire 200-1000 images with an exposure time such that each pixels has > 1000 counts/pixel. 
+1. Start the stream receiver ```./bin/acquire_and_save_stream  <dcu_ip_address> --nimages 1000 --output ./my_ff_data```
+1. Trigger the detector ```./bin/send_software_trigger <dcu_ip_address>```
+1. Average the images to generate the flatfield.tiff ```./bin/average_images ./my_ff_data flatfield.tiff```
+
+### C - Acquire and Preprocess
+Acquire a dataset with images from your object, normalize them to the flatfield and pre-process them, interpolating the missing infomation from the gaps and the bad pixels map.
+1. Start the stream receiver ```./bin/acquire_and_save_stream  <dcu_ip_address> --nimages 1000 --output ./my_obect_data```
+1. Trigger the detector ```./bin/send_software_trigger <dcu_ip_address>``` 
+1. Normalize the data to the flatfield ```./bin/normalize_images  --flat my_flatfield.tiff  --in ./my_obect_data/ --out ./my_obect_data_normalized/```
+1. Perform the inpainting of the images ```./bin/inpaint_tiff  --mask bad_pixel_mask.tiff  --in ./my_obect_data_normalized/ --out ./pre_processed_images/```
+
+###  D - More Acquisitions
+You can repeat points 1 to 4 above multiple times without restarting the acquition, as we configure a very large number of trigger (100000 by default) For CdTe sensors, flatfield might change, so it might be worth to repeat the **Flatfield** acquisition process every 10-30 minutes depending on the incoming X-Ray flux.
+
+### E - Disarming
+After you are finished acquiring the data we suggest to terminate the data acquition by sending the ```disarm``` command. 
+```./bin/disarm_detector <dcu_ip_address>```
+If you need to restart the process, begin again from **Part A**
+
+## A Continuous Pipeline
+
+
+
+
+
+
+
+
+
+### A — Producer: configure, arm, trigger, disarm
+
+REST tools live under [`src/detector_control/`](src/detector_control/) and are built to **`./bin/`** with the top-level CMake project (see [Build](#build)). They set **`nimages`** (frames **per** software trigger) and **`ntrigger`** (how many triggers the sequence allows), enable **stream** (CBOR), and typically turn **monitor** / **filewriter** off.
+
+| Step | Program | Role |
+|------|---------|------|
+| 1 | `connect_and_configure_and_arm_detector` | Configure detector + stream, then **arm**. No frames until trigger. |
+| 2 | `send_software_trigger` | Issue **N** **trigger** commands; each trigger acquires **`nimages`** frames on the stream. **`--ntrigger`** must match the configured **`ntrigger`**. |
+| 3 | `wait_idle_and_disarm_detector` | After the last trigger, wait until **idle**, then **disarm**. |
+| *(abort)* | `disarm_detector` | **Disarm** immediately without waiting for idle. |
+
+**Detector configuration checklist** (same idea as in the C++ sources): align corrections with your analysis plan—for flat-field work you often want **`flatfield_correction_applied`** off on the detector so your **offline** flat field is meaningful; follow your firmware **Simplon** reference for **`PUT`** bodies (`{"value": …}`) and state (**initialize** → **arm** → **trigger** → **disarm**).
+
+Set **`EIGER_API_VERSION`** if the DCU API path is not **`1.8.0`**.
+
+### B — Flat-field series from the stream
+
+**Option 1 — Mean flat field directly from the receiver (recommended when you want exactly *N* stream frames):**
+
+1. Configure **`nimages`** on the DCU (via step A) to the number of frames in your flat-field burst (e.g. **1000**).
+2. Start the consumer **before** triggering:
+
+   ```sh
+   ./bin/acquire_and_save_stream <DCU_HOST> --nimages 1000 \
+     --generate-flatfield-only --flatfield-file /path/to/flatfield.tiff
+   ```
+
+3. Send triggers (e.g. one trigger for 1000 frames):
+
+   ```sh
+   ./bin/send_software_trigger <DCU_HOST> --ntrigger 1
+   ```
+
+4. When the run finishes, **`flatfield.tiff`** is the **mean** of those frames (float32), suitable as **`--flat`** for **`normalize_images`**.
+
+**Option 2 — Many per-frame TIFFs, then average offline:**
+
+1. Save a directory of single-channel flat-field TIFFs (e.g. with **`DectrisStream2Receiver_linux`** or **`acquire_and_save_stream`** without **`--generate-flatfield-only`**).
+2. Average them:
+
+   ```sh
+   ./bin/average_images /path/to/flatfield_frames/ /path/to/flatfield.tiff
+   ```
+
+Source references: [`src/acquire_and_save_stream.c`](src/acquire_and_save_stream.c), [`src/average_images.cpp`](src/average_images.cpp).
+
+### C — Object / routine acquisition
+
+Run your stream receiver (**`./bin/DectrisStream2Receiver_linux`**, **`./bin/acquire_and_save_stream`**, or **`./bin/stream2_generic_receiver`** in the appropriate mode) **before** triggers, and save object data to a folder of TIFFs. Use **`wait_idle_and_disarm_detector`** when you finish a clean run.
+
+### D — Normalize with the flat field
+
+```sh
+./bin/normalize_images \
+  --in /path/to/object_tiffs/ \
+  --flat /path/to/flatfield.tiff \
+  --out /path/to/normalized/
+```
+
+Each frame is scaled as **object / (flat + ε)** (default **ε = 1e⁻⁶**). Output is **float** TIFF. See **`--help`** for **`--epsilon`** and other options.
+
+### E — Inpaint bad pixels or gaps
+
+```sh
+./bin/inpaint_tiff \
+  --mask /path/to/bad_pixel_mask.tiff \
+  --in /path/to/normalized/ \
+  --out /path/to/inpainted/ \
+  --inpaint-noise-scale 1.0 --radius 3 --nan-fill 1.0 --algorithm ns
+```
+
+Algorithms **`telea`** and **`ns`** are supported; see **`--help`** for the full list.
+
+---
+
+## Repository layout (code)
+
+| Location | Contents |
+|----------|----------|
+| [`CMakeLists.txt`](CMakeLists.txt) | Top-level build; outputs to **`./bin/`** and **`./lib/`**. |
+| [`src/detector_control/`](src/detector_control/) | **`eiger_client`**, **`eiger_session.hpp`**, REST demo sources (built as above). |
+| [`src/data_consumer/`](src/data_consumer/) | Stream libraries (**`stream2`**, **`stream2_helpers`**), TIFF writer, **`third_party/`** (tinycbor, compression, optional libtiff submodule). |
+| [`src/*.c`](src/) | Stream programs: **`stream2_generic_receiver`**, **`acquire_and_save_stream`**, **`DectrisStream2Receiver_linux`**, Windows demo. |
+| [`src/*.cpp`](src/) | Offline tools: **`normalize_images`**, **`inpaint_images.cpp`** → binary **`inpaint_tiff`**, **`average_images`**, **`data_analysis_pipeline_example`**. |
+
+Derived from concepts in the official DECTRIS documentation repo: [dectris/documentation](https://github.com/dectris/documentation).
+
+---
+
+## Programs (summary)
+
+| Target | Role |
+|--------|------|
+| **`stream2_generic_receiver`** | One binary, **mode** `buffer` \| `buffer-decode` \| `dump` \| `bifurcator` (first arg or `--mode`). |
+| **`DectrisStream2Receiver_linux`** | Buffer stream, decode stack, write TIFFs; **`--threads`** for decode/TIFF flush. |
+| **`acquire_and_save_stream`** | Fixed **`--nimages`**; optional **`--generate-flatfield`** / **`--generate-flatfield-only`** and **`--flatfield-file`**. |
+| **`average_images`** | Mean of all single-channel **`*.tif`** / **`*.tiff`** in a folder → one float32 TIFF (LibTIFF). |
+| **`normalize_images`** | Flat-field divide; batch **`--in`**, **`--flat`**, **`--out`** (OpenCV). |
+| **`inpaint_tiff`** | Mask-driven inpainting on normalized float TIFFs (OpenCV **photo**). |
+| **`data_analysis_pipeline_example`** | Small offline TIFF folder example (LibTIFF). |
+| **Detector control quartet** | **`connect_and_configure_and_arm_detector`**, **`send_software_trigger`**, **`wait_idle_and_disarm_detector`**, **`disarm_detector`**. |
+
+**Windows-only:** **`DectrisStream2Demo_windows`** when building on Windows.
+
+---
+
+## Build
+
+```sh
+git submodule update --init --recursive
+cmake -B build -S .
+cmake --build build
+```
+
+Executables appear under **`./bin/`**. On Linux you need **libzmq** (e.g. **`libzmq3-dev`**). Optional: **OpenCV** with **core**, **imgcodecs**, **imgproc**, **photo** for **`normalize_images`** / **`inpaint_tiff`**; **LibTIFF** (system or bundled submodule) for **`average_images`** and related tools. **`BUILD_LIBZMQ=ON`** can build ZeroMQ from source (see [`src/data_consumer/CMakeLists.txt`](src/data_consumer/CMakeLists.txt)).
+
+---
+
+## Buffer and network tuning (Linux receivers)
+
+Default decoded/wire buffer caps are large (**~40 GiB** each) via **`STREAM2_BUFFER_GB`** and **`STREAM2_WIRE_BUFFER_GB`**. Optional **`STREAM2_NET_IFACE`** selects the bind interface where applicable.
+
+**`stream2_generic_receiver bifurcator`** can relay the stream; downstream still uses ZMQ **PULL**. Useful environment variables include **`STREAM2_RCVBUF_MB`**, **`STREAM2_SNDBUF_MB`**, **`STREAM2_IO_THREADS`**, **`STREAM2_TIFF_THREADS`** (flush on exit), **`STREAM2_CPU_AFFINITY`**, **`STREAM2_BUSY_POLL_US`**, **`STREAM2_REALTIME`**. For very high rates, raise **`net.core.rmem_max`** / **`wmem_max`** (as root) and align IRQ affinity with your NIC.
+
+Example:
+
+```sh
+./bin/stream2_generic_receiver bifurcator 192.168.1.100 192.168.2.1 31002
+```
+
+---
+
+## Windows notes
+
+**OpenCV:** point CMake at **`OpenCVConfig.cmake`** (official pack often under **`build/x64/vc*`** matching your Visual Studio). **`OpenCV_DIR`** in the same shell, or **vcpkg** with **`opencv4`** and the toolchain file. This project also searches **`OpenCV_DIR/x64/vc*/`** automatically when the top **`build`** folder has no config file.
+
+With **`BUILD_LIBZMQ=ON`**, ZeroMQ is fetched; otherwise install matching **libzmq** for your toolchain.
