@@ -5,22 +5,18 @@
 /bin/
 /lib/
 
+*/_deps/
+*/CMakeCache.txt
+*/CMakeFiles/
+*/cmake_install.cmake
+
 # In-source or stray CMake under data_consumer (prefer root /build)
-src/data_consumer/build/
-src/data_consumer/CMakeCache.txt
-src/data_consumer/CMakeFiles/
-src/data_consumer/cmake_install.cmake
 src/data_consumer/Makefile
 src/data_consumer/compile_commands.json
-src/data_consumer/bin/
-src/data_consumer/lib/
 
 # third_party: local configure / FetchContent / libtiff external build
-src/data_consumer/third_party/CMakeCache.txt
-src/data_consumer/third_party/CMakeFiles/
-src/data_consumer/third_party/cmake_install.cmake
 src/data_consumer/third_party/Makefile
-src/data_consumer/third_party/_deps/
+src/data_consumer/third_party/
 
 # Generated TIFF outputs (example datasets)
 example_dataset/normalized/*.tiff
