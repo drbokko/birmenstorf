@@ -87,13 +87,29 @@ if(BUILD_LIBZMQ)
 else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PC_LIBZMQ QUIET libzmq)
+    # Use NAMES zmq (not libzmq.so): CMake adds the lib prefix / correct suffix per platform.
     find_library(ZeroMQ_LIBRARY
-        NAMES libzmq.so libzmq.dylib libzmq.dll
+        NAMES zmq libzmq
         PATHS ${PC_LIBZMQ_LIBDIR} ${PC_LIBZMQ_LIBRARY_DIRS}
-        REQUIRED
-        )
+    )
+    if(NOT ZeroMQ_LIBRARY)
+        message(FATAL_ERROR
+            "ZeroMQ library not found. On Debian/Ubuntu install: sudo apt install libzmq3-dev "
+            "(provides libzmq.so and libzmq.pc; package libzmq5 alone is runtime-only).")
+    endif()
+    set(ZMQ_INCLUDE_DIRS ${PC_LIBZMQ_INCLUDE_DIRS})
+    if(NOT ZMQ_INCLUDE_DIRS)
+        find_path(ZMQ_INCLUDE_DIR zmq.h)
+        if(ZMQ_INCLUDE_DIR)
+            set(ZMQ_INCLUDE_DIRS ${ZMQ_INCLUDE_DIR})
+        endif()
+    endif()
+    if(NOT ZMQ_INCLUDE_DIRS)
+        message(FATAL_ERROR
+            "ZeroMQ headers (zmq.h) not found. On Debian/Ubuntu install: sudo apt install libzmq3-dev")
+    endif()
     add_library(libzmq SHARED IMPORTED)
-    set_property(TARGET libzmq PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${PC_LIBZMQ_INCLUDE_DIRS})
+    set_property(TARGET libzmq PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${ZMQ_INCLUDE_DIRS})
     set_property(TARGET libzmq PROPERTY IMPORTED_LOCATION ${ZeroMQ_LIBRARY})
     set(LIBZMQ_TARGET libzmq)
 endif()
