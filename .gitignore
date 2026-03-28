@@ -5,10 +5,10 @@
 /bin/
 /lib/
 
-*/_deps/
-*/CMakeCache.txt
-*/CMakeFiles
-*/cmake_install.cmake
+*_deps/
+*CMakeCache.txt
+*CMakeFiles
+*cmake_install.cmake
 
 # In-source or stray CMake under data_consumer (prefer root /build)
 src/data_consumer/Makefile
