@@ -204,14 +204,8 @@ target_link_libraries(stream2_helpers PUBLIC
     Threads::Threads
     )
 
-add_executable(stream2_dump stream2_dump.c)
-target_link_libraries(stream2_dump stream2_helpers)
-
-add_executable(stream2_buffer stream2_buffer.c)
-target_link_libraries(stream2_buffer stream2_helpers)
-
-add_executable(stream2_buffer_decode stream2_buffer_decode.c)
-target_link_libraries(stream2_buffer_decode stream2_helpers)
+add_executable(stream2_generic_receiver stream2_generic_receiver.c)
+target_link_libraries(stream2_generic_receiver stream2_helpers)
 
 # Linux-only (pthread): skip on Windows â€” use DectrisStream2Demo_windows or WSL for similar workflows.
 if(NOT WIN32)
@@ -220,9 +214,6 @@ if(NOT WIN32)
     add_executable(acquire_and_save_stream acquire_and_save_stream.c)
     target_link_libraries(acquire_and_save_stream stream2_helpers)
 endif()
-
-add_executable(stream2_bifurcator stream2_bifurcator.c)
-target_link_libraries(stream2_bifurcator stream2_helpers)
 
 macro(dectris_link_libtiff _name)
     target_compile_features(${_name} PRIVATE cxx_std_17)
