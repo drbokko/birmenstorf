@@ -1,13 +1,9 @@
-cmake_minimum_required(VERSION 3.11...3.31)
-project(stream2_example LANGUAGES C CXX)
+# Stream V2 consumer libraries and tools (included from repository root CMakeLists.txt).
 
 option(DECTRIS_USE_BUNDLED_LIBTIFF "Build libtiff from third_party/libtiff (git submodule)" ON)
 
-# Executables and this project's static libs go under dectris_data_consumer/bin and .../lib
-# (same layout as an in-source build), regardless of -B build directory.
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
+# Application sources live next to this directory under src/ (repository root).
+set(DECTRIS_APP_SRC_DIR "${CMAKE_SOURCE_DIR}/src")
 
 include(CheckCCompilerFlag)
 find_package(Threads REQUIRED)
@@ -122,7 +118,7 @@ if(TARGET TIFF::TIFF)
 elseif(DECTRIS_USE_BUNDLED_LIBTIFF)
     message(WARNING
         "Bundled libtiff requested but target TIFF::TIFF is missing. "
-        "Initialize the submodule: git submodule update --init dectris_data_consumer/third_party/libtiff")
+        "Initialize the submodule: git submodule update --init src/data_consumer/third_party/libtiff")
 endif()
 if(NOT TIFF_FOUND)
     find_package(TIFF)
@@ -161,9 +157,9 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 include_directories(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
-    )
+)
 
 if(NOT "${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
     check_c_compiler_flag("-mf16c" COMPILER_SUPPORTS_MF16C)
@@ -174,28 +170,28 @@ if(NOT "${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
 endif()
 
 add_library(stream2 STATIC
-    src/stream2.c
-    src/stream2.h
-    )
+    stream2.c
+    stream2.h
+)
 target_link_libraries(stream2 PRIVATE
     tinycbor
     )
 
 # Shared helper library for examples
 add_library(stream2_helpers STATIC
-    src/stream2_common.c
-    src/stream2_common.h
-    src/stream2_stats.c
-    src/stream2_stats.h
-    src/stream2_decompress.c
-    src/stream2_decompress.h
-    src/stream2_image_buffer.c
-    src/stream2_image_buffer.h
-    src/stream2_buffer_decode_stack.c
-    src/stream2_buffer_decode_stack.h
-    src/tiff_writer.c
-    src/tiff_writer.h
-    )
+    stream2_common.c
+    stream2_common.h
+    stream2_stats.c
+    stream2_stats.h
+    stream2_decompress.c
+    stream2_decompress.h
+    stream2_image_buffer.c
+    stream2_image_buffer.h
+    stream2_buffer_decode_stack.c
+    stream2_buffer_decode_stack.h
+    tiff_writer.c
+    tiff_writer.h
+)
 target_link_libraries(stream2_helpers PUBLIC
     ${LIBZMQ_TARGET}
     compression
@@ -204,14 +200,14 @@ target_link_libraries(stream2_helpers PUBLIC
     Threads::Threads
     )
 
-add_executable(stream2_generic_receiver stream2_generic_receiver.c)
+add_executable(stream2_generic_receiver "${DECTRIS_APP_SRC_DIR}/stream2_generic_receiver.c")
 target_link_libraries(stream2_generic_receiver stream2_helpers)
 
-# Linux-only (pthread): skip on Windows â€” use DectrisStream2Demo_windows or WSL for similar workflows.
+# Linux-only (pthread): skip on Windows — use DectrisStream2Demo_windows or WSL for similar workflows.
 if(NOT WIN32)
-    add_executable(DectrisStream2Receiver_linux DectrisStream2Receiver_linux.c)
+    add_executable(DectrisStream2Receiver_linux "${DECTRIS_APP_SRC_DIR}/DectrisStream2Receiver_linux.c")
     target_link_libraries(DectrisStream2Receiver_linux stream2_helpers)
-    add_executable(acquire_and_save_stream acquire_and_save_stream.c)
+    add_executable(acquire_and_save_stream "${DECTRIS_APP_SRC_DIR}/acquire_and_save_stream.c")
     target_link_libraries(acquire_and_save_stream stream2_helpers)
 endif()
 
@@ -230,19 +226,19 @@ macro(dectris_link_libtiff _name)
 endmacro()
 
 if(TIFF_FOUND)
-    set(DECTRIS_LIBTIFF_WARNING_FILTER src/tiff_warning_filter.cpp)
+    set(DECTRIS_LIBTIFF_WARNING_FILTER tiff_warning_filter.cpp)
     add_executable(data_analysis_pipeline_example
-        data_analysis_pipeline_example.cpp
+        "${DECTRIS_APP_SRC_DIR}/data_analysis_pipeline_example.cpp"
         ${DECTRIS_LIBTIFF_WARNING_FILTER})
     dectris_link_libtiff(data_analysis_pipeline_example)
     add_executable(average_images
-        average_images.cpp
+        "${DECTRIS_APP_SRC_DIR}/average_images.cpp"
         ${DECTRIS_LIBTIFF_WARNING_FILTER})
     dectris_link_libtiff(average_images)
 endif()
 
 if(OpenCV_FOUND)
-    add_executable(normalize_images normalize_images.cpp)
+    add_executable(normalize_images "${DECTRIS_APP_SRC_DIR}/normalize_images.cpp")
     target_compile_features(normalize_images PRIVATE cxx_std_17)
     if(TARGET opencv_core AND TARGET opencv_imgcodecs AND TARGET opencv_imgproc)
         target_link_libraries(normalize_images PRIVATE
@@ -252,7 +248,7 @@ if(OpenCV_FOUND)
         target_link_libraries(normalize_images PRIVATE ${OpenCV_LIBS})
     endif()
 
-    add_executable(inpaint_tiff inpaint_images.cpp)
+    add_executable(inpaint_tiff "${DECTRIS_APP_SRC_DIR}/inpaint_images.cpp")
     target_compile_features(inpaint_tiff PRIVATE cxx_std_17)
     if(TARGET opencv_core AND TARGET opencv_imgcodecs AND TARGET opencv_imgproc
             AND TARGET opencv_photo)
@@ -265,7 +261,7 @@ if(OpenCV_FOUND)
 endif()
 
 if(WIN32)
-    add_executable(DectrisStream2Demo_windows DectrisStream2Demo_windows.c)
+    add_executable(DectrisStream2Demo_windows "${DECTRIS_APP_SRC_DIR}/DectrisStream2Demo_windows.c")
     target_link_libraries(DectrisStream2Demo_windows
         stream2_helpers
         user32
@@ -304,8 +300,8 @@ endif()
 # provides a way to clean everything including CMake cache files, binaries, and intermediate files.
 add_custom_target(clean-build
     COMMAND ${CMAKE_COMMAND} -E echo "Cleaning build artifacts..."
-    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_SOURCE_DIR}/bin
-    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_SOURCE_DIR}/bin
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_SOURCE_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/bin
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/lib
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_BINARY_DIR}/CMakeFiles

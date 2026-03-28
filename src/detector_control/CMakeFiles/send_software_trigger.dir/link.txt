@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/send_software_trigger.dir/__/send_software_trigger.cpp.o -o ../../bin/send_software_trigger  ../../lib/libeiger_client.a /usr/lib/aarch64-linux-gnu/libcurl.so 

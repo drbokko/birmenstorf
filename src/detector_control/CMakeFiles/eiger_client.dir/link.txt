@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libeiger_client.a CMakeFiles/eiger_client.dir/eiger_client.cpp.o
+/usr/bin/ranlib ../../lib/libeiger_client.a
