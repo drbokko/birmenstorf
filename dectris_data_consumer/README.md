@@ -147,30 +147,13 @@ Set **`BUILD_LIBZMQ=YES`** to fetch and build ZeroMQ from source; otherwise CMak
 With **vcpkg**: install `opencv4[core,imgcodecs,imgproc,photo]:x64-windows` and pass `-DCMAKE_TOOLCHAIN_FILE=.../vcpkg/scripts/buildsystems/vcpkg.cmake` so `find_package(OpenCV)` works without **OpenCV_DIR**.
 
 Open a **Visual Studio** developer shell (adjust paths), then:
-
 ```powershell
-cd dectris_data_consumer
+$vs="C:\Program Files\Microsoft Visual Studio\18\Community"
+& "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64  
+cd birmenstorf\dectris_data_consumer
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DBUILD_LIBZMQ=ON `
-  -DOpenCV_DIR="C:\path\to\opencv\build\x64\vc17"
-cmake --build build --config Debug
+cmake --build .
 ```
-
-### Cleaning
-
-- **Makefile / Ninja:** `cmake --build . --target clean` — removes build products, keeps the CMake cache.
-- **Deep clean:** `cmake --build . --target clean-build` — also removes `bin/`, `lib/`, generated `CMakeFiles`, cache, `compile_commands.json`, and `_deps` under the build tree (full reconfigure next time).
-
-## Python
-
-### `client.py`
-
-Minimal Stream V2 receiver using `cbor2`, `pyzmq`, `numpy`, and `dectris-compression`. `MultiDimArray` / `TypedArray` fields become NumPy arrays.
-
-```sh
-pip install cbor2 "dectris-compression~=0.3.0" numpy pyzmq
-python client.py
-```
-
 
 
 [dectris-compression]: https://github.com/dectris/compression
