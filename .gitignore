@@ -20,3 +20,5 @@ dectris_data_consumer/third_party/cmake_install.cmake
 dectris_data_consumer/third_party/Makefile
 example_dataset/normalized/*.tiff
 example_dataset/inpainted/*.tiff
+dectris_data_consumer/third_party/CMakeCache.txt
+dectris_data_consumer/third_party/_deps/*
