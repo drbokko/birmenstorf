@@ -5,6 +5,8 @@
 /bin/
 /lib/
 
+Makefile
+
 *_deps/
 *CMakeCache.txt
 *CMakeFiles
