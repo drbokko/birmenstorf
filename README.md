@@ -88,7 +88,7 @@ Acquire a dataset with images from your object, normalize them to the flatfield 
 1. Start the stream receiver ```./bin/acquire_and_save_stream  <dcu_ip_address> --nimages 1000 --output ./my_obect_data```
 1. Trigger the detector ```./bin/send_software_trigger <dcu_ip_address>``` 
 1. Normalize the data to the flatfield ```./bin/normalize_images  --flat my_flatfield.tiff  --in ./my_obect_data/ --out ./my_obect_data_normalized/```
-1. Perform the inpainting of the images ```./bin/inpaint_tiff  --mask bad_pixel_mask.tiff  --in ./my_obect_data_normalized/ --out ./pre_processed_images/```
+1. Perform the inpainting of the images ```./bin/inpaint_tiff  --mask bad_pixel_mask.tiff  --in ./my_obect_data_normalized/ --out ./pre_processed_images/ --radius 3 --nan-fill 1.0 --algorithm ns```
 
 You can repeat points 1 to 4 above multiple times without restarting the acquition, as we configure a very large number of trigger (100000 by default) For CdTe sensors, flatfield might change, so it might be worth to repeat the **Flatfield** acquisition process every 10-30 minutes depending on the incoming X-Ray flux.
 
