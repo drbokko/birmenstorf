@@ -29,7 +29,7 @@ def decode_darray(darray_dict):
     logging.debug(f"decoded {len(binary_data)} bytes")
     
     # Convert to numpy array with correct dtype and shape
-    numpy_array = np.frombuffer(binary_data, dtype=dtype_str).reshape(shape[::-1])  # Note: shape is [w,h] but numpy uses [h,w]
+    numpy_array = np.frombuffer(binary_data, dtype=dtype_str).reshape(shape)  # Note: shape is [w,h] but numpy uses [h,w]
     
     return numpy_array
 
