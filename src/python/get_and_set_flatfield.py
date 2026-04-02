@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Example script to get flatfield from EIGER detector and re-upload it for both thresholds.
-Demonstrates the full round-trip process of downloading and uploading flatfield corrections.
-"""
+Flat-field helpers for the EIGER DCU (encode/decode darray, get/set on detector).
 
+Import this module to reuse the functions without connecting to hardware.
+Run as a script (`python get_and_set_flatfield.py`) to execute the full example on the detector.
+"""
+from pathlib import Path
 import numpy as np
 import base64
 import logging
+import tifffile
 from DEigerClient import DEigerClient
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)-8s - %(asctime)s - %(message)s')
@@ -44,7 +47,8 @@ def encode_darray(numpy_array, darray_version=[1, 0, 0]):
         np.dtype('float32'): '<f4',
         np.dtype('uint32'): '<u4'
     }
-    
+    numpy_array=numpy_array.reshape(numpy_array.shape[1], numpy_array.shape[0]) # flip from [h,w] to [w,h]
+
     # Ensure array is in correct format
     if numpy_array.dtype not in [np.dtype('<f4'), np.dtype('<u4')]:
         numpy_array = numpy_array.astype('<f4')
@@ -140,117 +144,126 @@ def configure_thresholds(client, thresholds):
         client.setDetectorConfig("threshold/2/mode", 'disabled')
         logging.info("Threshold 2: disabled")
 
-# Configuration
-DCU_IP = 'dev-si-e2dcu-01'
-THRESHOLDS = [13000, 30000]  # Two thresholds: 13 keV and 30 keV
 
-logging.info("=" * 60)
-logging.info("EIGER Detector Flatfield Get & Set Example")
-logging.info("=" * 60)
+__all__ = [
+    "configure_thresholds",
+    "decode_darray",
+    "encode_darray",
+    "get_flatfield_from_detector",
+    "main",
+    "set_flatfield_to_detector",
+]
 
-# Connect to detector
-logging.info(f"Connecting to {DCU_IP}...")
-c = DEigerClient.DEigerClient(host=DCU_IP)
-logging.info(f"Connected - Detector status: {c.detectorStatus('state')['value']}")
 
-# Configure both thresholds
-configure_thresholds(c, THRESHOLDS)
+def main():
+    """Run the interactive get/set/verify example (connects to the detector)."""
+    DCU_IP = 'dev-si-e2dcu-06.dectris.local'  # Change this to your detector IP
+    THRESHOLDS = [13000, 30000]  # Two thresholds: 13 keV and 30 keV
 
-# Get detector geometry
-try:
-    x_pixels = c.detectorConfig("x_pixels_in_detector")["value"]
-    y_pixels = c.detectorConfig("y_pixels_in_detector")["value"]
-    logging.info(f"Detector geometry: {x_pixels} x {y_pixels} pixels")
-except Exception as e:
-    logging.warning(f"Could not get detector geometry: {e}")
+    logging.info("=" * 60)
+    logging.info("EIGER Detector Flatfield Get & Set Example")
+    logging.info("=" * 60)
 
-logging.info("="*60)
-logging.info("STEP 1: Getting current flatfield from detector")
-logging.info("="*60)
+    logging.info("Connecting to %s...", DCU_IP)
+    c = DEigerClient.DEigerClient(host=DCU_IP)
+    logging.info("Connected - Detector status: %s", c.detectorStatus("state")["value"])
 
-# Get current flatfield
-original_flatfield = get_flatfield_from_detector(c)
+    configure_thresholds(c, THRESHOLDS)
 
-if original_flatfield is not None:
-    # Save original for reference
-    np.save("original_flatfield.npy", original_flatfield)
-    logging.info("Original flatfield saved as 'original_flatfield.npy'")
-    
-    logging.info("="*60)
-    logging.info("STEP 2: Re-uploading flatfield for both thresholds")
-    logging.info("="*60)
-    
-    # Test 1: Re-upload the same flatfield
-    logging.info("Test 1: Re-uploading original flatfield...")
-    success1 = set_flatfield_to_detector(c, original_flatfield)
-    
-    if success1:
-        # Verify it was uploaded correctly
-        logging.info("Verifying uploaded flatfield...")
-        retrieved_flatfield = get_flatfield_from_detector(c)
-        
-        if retrieved_flatfield is not None:
-            # Compare arrays
-            if np.allclose(original_flatfield, retrieved_flatfield, rtol=1e-6):
-                logging.info("Verification successful: uploaded flatfield matches original")
-            else:
-                logging.warning("uploaded flatfield differs from original")
-                logging.info(f"Max difference: {np.max(np.abs(original_flatfield - retrieved_flatfield))}")
-    
-    logging.info("="*60)
-    logging.info("STEP 3: Testing with modified flatfield")
-    logging.info("="*60)
-    
-    # Test 2: Create and upload a slightly modified flatfield
-    logging.info("Test 2: Creating modified flatfield...")
-    modified_flatfield = original_flatfield.copy()
-    
-    # Add small random variations (±2% of original values)
-    rng = np.random.default_rng(42)
-    noise = rng.uniform(-0.50, 0.50, size=modified_flatfield.shape)
-    modified_flatfield = modified_flatfield * (1.0 + noise)
-    
-    # Ensure reasonable values
-    modified_flatfield = np.clip(modified_flatfield, 0.1, 10.0)
-    
-    logging.info(f"Modified flatfield range: {modified_flatfield.min():.4f} to {modified_flatfield.max():.4f}")
-    logging.info(f"Mean change: {np.mean(modified_flatfield - original_flatfield):.6f}")
-    
-    # Upload modified flatfield
-    success2 = set_flatfield_to_detector(c, modified_flatfield)
-    
-    if success2:
-        # Save modified flatfield
-        np.save("modified_flatfield.npy", modified_flatfield)
-        logging.info("Modified flatfield saved as 'modified_flatfield.npy'")
-        
-        # Verify
-        final_flatfield = get_flatfield_from_detector(c)
-        if final_flatfield is not None:
-            if np.allclose(modified_flatfield, final_flatfield, rtol=1e-6):
-                logging.info("Modified flatfield uploaded and verified successfully")
-            else:
-                logging.warning("retrieved flatfield differs from uploaded version")
-    
-    logging.info("="*60)
-    logging.info("SUMMARY")
-    logging.info("="*60)
-    logging.info(f"Both thresholds configured: {THRESHOLDS}")
-    logging.info(f"Original flatfield retrieved and saved")
-    logging.info(f"Flatfield round-trip test: {'PASSED' if success1 else 'FAILED'}")
-    logging.info(f"Modified flatfield test: {'PASSED' if success2 else 'FAILED'}")
-    logging.info("Files created:")
-    logging.info("- original_flatfield.npy: Original detector flatfield")
-    if success2:
-        logging.info("- modified_flatfield.npy: Modified flatfield with random variations")
-    
-else:
-    logging.error("="*60)
-    logging.error("CANNOT CONTINUE - No flatfield available from detector")
-    logging.error("="*60)
-    logging.error("Make sure:")
-    logging.error("1. Detector has a flatfield correction configured")  
-    logging.error("2. Detector is properly connected and initialized")
-    logging.error("3. Flatfield correction is enabled")
+    try:
+        x_pixels = c.detectorConfig("x_pixels_in_detector")["value"]
+        y_pixels = c.detectorConfig("y_pixels_in_detector")["value"]
+        logging.info("Detector geometry: %s x %s pixels", x_pixels, y_pixels)
+    except Exception as e:
+        logging.warning("Could not get detector geometry: %s", e)
 
-logging.info("="*60)
+    logging.info("=" * 60)
+    logging.info("STEP 1: Getting current flatfield from detector")
+    logging.info("=" * 60)
+
+    original_flatfield = get_flatfield_from_detector(c)
+
+    if original_flatfield is not None:
+        tifffile.imwrite(Path('example_dataset/original_flatfield.tiff'), original_flatfield)
+        logging.info("Original flatfield saved as 'original_flatfield.tiff'")
+
+        logging.info("=" * 60)
+        logging.info("STEP 2: Re-uploading flatfield for both thresholds")
+        logging.info("=" * 60)
+
+        logging.info("Test 1: Re-uploading original flatfield...")
+        success1 = set_flatfield_to_detector(c, original_flatfield)
+
+        if success1:
+            logging.info("Verifying uploaded flatfield...")
+            retrieved_flatfield = get_flatfield_from_detector(c)
+
+            if retrieved_flatfield is not None:
+                if np.allclose(original_flatfield, retrieved_flatfield, rtol=1e-6):
+                    logging.info("Verification successful: uploaded flatfield matches original")
+                else:
+                    logging.warning("uploaded flatfield differs from original")
+                    logging.info(
+                        "Max difference: %s",
+                        np.max(np.abs(original_flatfield - retrieved_flatfield)),
+                    )
+
+        logging.info("=" * 60)
+        logging.info("STEP 3: Testing with modified flatfield")
+        logging.info("=" * 60)
+
+        logging.info("Test 2: Creating modified flatfield...")
+        modified_flatfield = original_flatfield.copy()
+
+        # rng = np.random.default_rng(42)
+        # noise = rng.uniform(-0.50, 0.50, size=modified_flatfield.shape)
+        # modified_flatfield = modified_flatfield * (1.0 + noise)
+        # modified_flatfield = np.clip(modified_flatfield, 0.1, 10.0)
+        modified_flatfield[100:200, 50:100]=2.0
+
+        logging.info(
+            "Modified flatfield range: %s to %s",
+            modified_flatfield.min(),
+            modified_flatfield.max(),
+        )
+        logging.info("Mean change: %s", np.mean(modified_flatfield - original_flatfield))
+
+        success2 = set_flatfield_to_detector(c, modified_flatfield)
+
+        if success2:
+            tifffile.imwrite(Path('example_dataset/modified_flatfield.tiff'), modified_flatfield)
+            logging.info("Modified flatfield saved as 'modified_flatfield.tiff'")
+
+            final_flatfield = get_flatfield_from_detector(c)
+            if final_flatfield is not None:
+                if np.allclose(modified_flatfield, final_flatfield, rtol=1e-6):
+                    logging.info("Modified flatfield uploaded and verified successfully")
+                else:
+                    logging.warning("retrieved flatfield differs from uploaded version")
+
+        logging.info("=" * 60)
+        logging.info("SUMMARY")
+        logging.info("=" * 60)
+        logging.info("Both thresholds configured: %s", THRESHOLDS)
+        logging.info("Original flatfield retrieved and saved")
+        logging.info("Flatfield round-trip test: %s", "PASSED" if success1 else "FAILED")
+        logging.info("Modified flatfield test: %s", "PASSED" if success2 else "FAILED")
+        logging.info("Files created:")
+        logging.info("- original_flatfield.npy: Original detector flatfield")
+        if success2:
+            logging.info("- modified_flatfield.npy: Modified flatfield with random variations")
+
+    else:
+        logging.error("=" * 60)
+        logging.error("CANNOT CONTINUE - No flatfield available from detector")
+        logging.error("=" * 60)
+        logging.error("Make sure:")
+        logging.error("1. Detector has a flatfield correction configured")
+        logging.error("2. Detector is properly connected and initialized")
+        logging.error("3. Flatfield correction is enabled")
+
+    logging.info("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

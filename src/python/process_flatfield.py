@@ -10,11 +10,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-
-try:
-    import tifffile
-except ImportError as e:  # pragma: no cover
-    raise SystemExit("install tifffile: pip install tifffile") from e
+import tifffile
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s - %(asctime)s - %(message)s")
 
@@ -32,7 +28,7 @@ def process_flatfield(path_in: Path, path_out: Path) -> None:
     reciprocal = (1.0 / normalized).astype(np.float32)
     reciprocal[np.isinf(reciprocal)] = 0.0
     reciprocal[np.isnan(reciprocal)] = 0.0
-    
+
     path_out.parent.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(path_out, reciprocal)
 
