@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+NOT TESTED
 Simple script to get and re-upload flatfield for both thresholds
 """
 
