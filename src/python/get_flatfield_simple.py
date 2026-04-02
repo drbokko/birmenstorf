@@ -5,42 +5,23 @@ Handles darray format with base64 encoding
 """
 
 import numpy as np
-import base64
 import logging
+from pathlib import Path
 from DEigerClient import DEigerClient
+from get_and_set_flatfield import decode_darray, configure_thresholds
+import tifffile
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)-8s - %(asctime)s - %(message)s')
 
-def decode_darray(darray_dict):
-    """
-    Decode darray format used by EIGER detector.
-    Format: {"__darray__": version, "type": dtype, "shape": [w,h], "filters": ["base64"], "data": base64_data}
-    """
-    # Extract metadata
-    dtype_str = darray_dict["type"]  # e.g., "<f4" or "<u4" 
-    shape = darray_dict["shape"]     # [width, height]
-    base64_data = darray_dict["data"]
-    
-    logging.debug(f"darray type: {dtype_str}")
-    logging.debug(f"darray shape: {shape}")
-    logging.debug(f"darray version: {darray_dict.get('__darray__', 'unknown')}")
-    
-    # Decode base64 data
-    binary_data = base64.b64decode(base64_data)
-    logging.debug(f"decoded {len(binary_data)} bytes")
-    
-    # Convert to numpy array with correct dtype and shape
-    numpy_array = np.frombuffer(binary_data, dtype=dtype_str).reshape(shape[::-1])  # Note: shape is [w,h] but numpy uses [h,w]
-    
-    return numpy_array
-
 # Configuration
-DCU_IP = 'dev-si-e2dcu-01'  # Change this to your detector IP
-OUTPUT_FILE = 'detector_flatfield.npy'
+DCU_IP = 'dev-si-e2dcu-06.dectris.local'  # Change this to your detector IP
+THRESHOLDS = [13000, 30000]  # Two thresholds: 13 keV and 30 keV
+OUTPUT_FILE = Path('example_dataset/original_flatfield.tiff')
 
 # Connect and retrieve flatfield
 logging.info(f"Connecting to {DCU_IP}...")
 c = DEigerClient.DEigerClient(host=DCU_IP)
+configure_thresholds(c, THRESHOLDS)
 
 logging.info("Getting flatfield...")
 flatfield_response = c.detectorConfig("flatfield")
@@ -54,9 +35,9 @@ if flatfield_data is not None and isinstance(flatfield_data, dict):
             flatfield_array = decode_darray(flatfield_data)
             
             # Save to file
-            np.save(OUTPUT_FILE, flatfield_array)
+            tifffile.imwrite(OUTPUT_FILE, flatfield_array)
             
-            logging.info(f"Flatfield saved to {OUTPUT_FILE}")
+            logging.info(f"Original flatfield saved to {OUTPUT_FILE}")
             logging.info(f"Final shape: {flatfield_array.shape}")
             logging.info(f"Data type: {flatfield_array.dtype}")
             logging.info(f"Range: {flatfield_array.min():.4f} to {flatfield_array.max():.4f}")
