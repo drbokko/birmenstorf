@@ -15,14 +15,14 @@ import numpy as np
 ############################################################
 configuration = {
     # Detector IP and Initialization
-    "DCU_IP": '172.31.1.1',
+    "DCU_IP": '192.168.30.66',
     "force_initialization": False,
 
     # Data acquisition parameters
     "thresholds": [15000],  # Energy thresholds [eV], 1..4 values supported
     "number_of_images": 1,       # Number of images to capture
     "number_of_triggers": 1000,       # Number of trigger to send
-    "exposure_time": 1/500.0,          # Exposure time per image [s]
+    "exposure_time": 1/5.0,          # Exposure time per image [s]
     "sleep_time": 0.2,             # Delay between frames [s]
 
     # Live viewer performance knobs

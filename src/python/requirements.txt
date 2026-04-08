@@ -1,0 +1,13 @@
+# Third-party deps for scripts in this folder.
+# Dectris stream decompression (`dectris.compression`, used by live_viewer.py):
+# install from the wheel/SDK supplied by DECTRIS — not included here.
+# python -m pip install -r src/python/requirements.txt
+
+numpy
+cbor2
+pyzmq
+matplotlib
+tifffile
+scipy
+silx
+dectris-compression
