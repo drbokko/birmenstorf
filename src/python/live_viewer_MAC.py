@@ -1,7 +1,7 @@
-import time
-import threading
+import queue
 import signal
-import cv2
+import threading
+import time
 
 # --- Detector control imports ---
 from DEigerClient import DEigerClient
@@ -16,7 +16,7 @@ import numpy as np
 ############################################################
 configuration = {
     # Detector IP and Initialization
-    "DCU_IP": '169.254.254.1',
+    "DCU_IP": 'dev-si-e2dcu-06.dectris.local',
     "force_initialization": False,
 
     # Data acquisition parameters
@@ -30,6 +30,10 @@ configuration = {
     "live_every": 1,               # Show every Nth frame in live view
     "stats_subsample": 8,          # Subsample factor for median/contrast
     "max_fps": 20.0,               # Cap redraw rate (frames/sec)
+
+    # Geometry: imshow uses (rows, cols) = (height, width). EIGER2 1M-W is 2068×512 px (wide).
+    # If the stream sends (width, height) order, we transpose so the window matches the detector.
+    "live_image_shape_hw": (512, 2068),
 }
 
 
@@ -96,45 +100,49 @@ def tag_hook(decoder, tag):
     return tag_decoder(tag) if tag_decoder else tag
 
 
+def prepare_live_image(data: np.ndarray, shape_hw: tuple[int, int] | None) -> np.ndarray:
+    """Return array shaped (height, width) for imshow; transpose if stream order is swapped."""
+    arr = np.asarray(data)
+    if shape_hw is None:
+        return arr
+    h, w = shape_hw
+    if arr.shape == (h, w):
+        return arr
+    if arr.shape == (w, h):
+        return arr.T
+    return arr
+
+
 ############################################################
-# Stream Receiver (thread) — live view only, first threshold only
+# Stream Receiver (thread) — ZMQ only; GUI runs on main thread (macOS requirement)
 ############################################################
 
 class StreamReceiver(threading.Thread):
-    def __init__(self, ip: str, live_every: int = 5, stats_subsample: int = 8, max_fps: float = 20.0):
+    def __init__(
+        self,
+        ip: str,
+        live_queue: "queue.Queue",
+        live_every: int = 5,
+    ):
         super().__init__(daemon=True)
         self.ip = ip
         self.endpoint = f"tcp://{ip}:31001"
+        self.live_queue = live_queue
         self.live_every = max(1, int(live_every))
-        self.stats_subsample = max(1, int(stats_subsample))
-        self.max_dt = 1.0 / max(1.0, float(max_fps))
         self.stop_event = threading.Event()
         self.finished_event = threading.Event()
 
-        # runtime fields
         self.image_num = 0
-        self.count_time = None
-        self.thresholds = []
         self.channel = 'threshold_1'  # plot only first threshold
-
-        # live UI cache
-        self._fig = None
-        self._ax = None
-        self._im = None
-        self._last_draw = 0.0
-
-    def _setup_live(self):
-        import matplotlib.pyplot as plt  # lazy import
-        plt.ion()
-        fig, ax = plt.subplots(1, 1, figsize=(12, 5))
-        ax.set_title("Threshold 1")
-        ax.set_xticks([]); ax.set_yticks([])
-        # placeholder image; real shape set on first frame
-        im = ax.imshow(np.zeros((10, 10), dtype=np.uint16), cmap='gray', vmin=0, vmax=1, animated=False)
-        self._fig, self._ax, self._im = fig, ax, im
 
     def stop(self):
         self.stop_event.set()
+
+    def _put_live(self, item):
+        try:
+            self.live_queue.put_nowait(item)
+        except queue.Full:
+            pass  # drop: main thread is behind; keep stream responsive
 
     def run(self):
         import zmq
@@ -147,7 +155,6 @@ class StreamReceiver(threading.Thread):
         try:
             socket.connect(self.endpoint)
             print(f"[STREAM] Connected PULL {self.endpoint}")
-            self._setup_live()
 
             start_time = None
 
@@ -164,9 +171,9 @@ class StreamReceiver(threading.Thread):
                     start_time = time.time()
                     print(f"[STREAM] start")
                     self.image_num = 0
-                    self.count_time = message.get('count_time')
                     th = message.get('threshold_energy', {})
-                    self.thresholds = [th.get('threshold_1')]
+                    thresholds = [th.get('threshold_1')]
+                    self._put_live(('start', message.get('count_time'), thresholds))
 
                 elif mtype == 'image':
                     self.image_num += 1
@@ -174,50 +181,24 @@ class StreamReceiver(threading.Thread):
                     print(f"[STREAM] {img_id} image received")
                     draw_this = (img_id % self.live_every == 0)
 
-                    # Select first threshold only
                     data = message['data'].get(self.channel)
                     if data is None:
-                        # fallback: pick the first available channel if not present
                         first_key = next(iter(message['data']))
                         data = message['data'][first_key]
                     data = np.asarray(data)
 
-                    if self._im and draw_this:
-                        # Update artist in-place (fast path)
-                        ss = self.stats_subsample
-                        sample = data[::ss, ::ss]
-                        median_counts = float(np.median(sample))
-
-                        if self._im.get_array().shape != data.shape:
-                            self._im.set_data(np.zeros_like(data))
-                        self._im.set_data(data)
-
-                        # contrast window around median; guard against zero span
-                        lo = median_counts * 0.8
-                        hi = max(lo + 1.0, median_counts * 1.2)
-                        self._im.set_clim(lo, hi)
-
-                        now = time.time()
-                        if now - self._last_draw >= self.max_dt:
-                            # Update title with current image index
-                            if self._ax:
-                                if median_counts <=10e3:
-                                    self._ax.set_title(f"Image {img_id} - {median_counts:.0f} cps (th={self.thresholds} eV)")
-                                elif median_counts <=10e6:
-                                    self._ax.set_title(f"Image {img_id} - {median_counts/1e3:.1f} kcps (th={self.thresholds} eV)")
-                                else:
-                                    self._ax.set_title(f"Image {img_id} - {median_counts/1e6:.1f} Mcps (th={self.thresholds} eV)")
-                            self._fig.canvas.draw_idle()
-                            self._fig.canvas.flush_events()
-                            self._last_draw = now
+                    if draw_this:
+                        self._put_live(('image', img_id, data))
 
                 elif mtype == 'end':
                     elapsed = (time.time() - start_time) if start_time else 0
                     print(f"[STREAM] {self.image_num} images in {elapsed:.1f}s (live view only)")
+                    self._put_live(('end', self.image_num, elapsed))
                     break
 
         except Exception as e:
             print(f"[STREAM] Error: {e}")
+            self._put_live(('error', str(e)))
         finally:
             try:
                 socket.close(0)
@@ -226,6 +207,41 @@ class StreamReceiver(threading.Thread):
             context.term()
             self.finished_event.set()
             print("[STREAM] Receiver stopped")
+
+
+def setup_live_view(shape_hw: tuple[int, int] | None = None, fig_height_in: float = 3.0):
+    """Create the live window on the **main** thread (required on macOS).
+
+    Figure aspect follows the detector so a wide module is not stretched into a square axes.
+    """
+    import matplotlib.pyplot as plt
+
+    plt.ion()
+    if shape_hw is not None:
+        h, w = shape_hw
+        aspect_wh = w / h
+        fig_w = fig_height_in * aspect_wh
+        figsize = (fig_w, fig_height_in)
+        placeholder = np.zeros((h, w), dtype=np.uint16)
+    else:
+        figsize = (12, 5)
+        placeholder = np.zeros((10, 10), dtype=np.uint16)
+
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    ax.set_title("Threshold 1")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    im = ax.imshow(
+        placeholder,
+        cmap="gray",
+        vmin=0,
+        vmax=1,
+        animated=False,
+        aspect="equal",
+        interpolation="nearest",
+    )
+    ax.set_aspect("equal")
+    return fig, ax, im
 
 
 ############################################################
@@ -279,43 +295,106 @@ if __name__ == '__main__':
     c.setStreamConfig('format', 'cbor') 
     c.setStreamConfig('header_detail', 'all') 
 
-    # Start Stream Receiver (live view only)
+    import matplotlib.pyplot as plt
+
+    # GUI must run on the main thread on macOS; ZMQ + acquisition run in worker threads.
+    live_queue: queue.Queue = queue.Queue(maxsize=32)
+    shape_hw = configuration.get("live_image_shape_hw")
+    fig, ax, im = setup_live_view(shape_hw=shape_hw)
+
     stream_thread = StreamReceiver(
         ip=configuration["DCU_IP"],
+        live_queue=live_queue,
         live_every=configuration["live_every"],
-        stats_subsample=configuration["stats_subsample"],
-        max_fps=configuration["max_fps"],
     )
-    stream_thread.start()
 
-    # Graceful shutdown on CTRL-C
+    acq_done = threading.Event()
+
+    def run_acquisition():
+        try:
+            print("Acquiring data...")
+            print("Arming")
+            c.sendDetectorCommand('arm')
+            for trigger in range(configuration['number_of_triggers']):
+                c.sendDetectorCommand('trigger')
+            print("disarming")
+            c.sendDetectorCommand('disarm')
+        except Exception as e:
+            print(f"[ACQ] Error: {e}")
+        finally:
+            acq_done.set()
+
+    acq_thread = threading.Thread(target=run_acquisition, daemon=True)
+    shutdown = threading.Event()
+
     def handle_sigint(sig, frame):
         print("\n[MAIN] Caught interrupt. Stopping...")
-        if stream_thread:
-            stream_thread.stop()
-        raise SystemExit
+        shutdown.set()
+        stream_thread.stop()
 
     signal.signal(signal.SIGINT, handle_sigint)
 
-    # Run Acquisition
-    try:
-        print("Acquiring data...")
-        print("Arming")
-        c.sendDetectorCommand('arm')
-        for trigger in range(configuration['number_of_triggers']):
-            # print(f'trigger #{trigger}') # for debugging; comment out to avoid flooding the console
-            c.sendDetectorCommand('trigger')
-        print("disarming")
-        c.sendDetectorCommand('disarm')  # writes data internally and disarms; filewriter is disabled
+    stream_thread.start()
+    acq_thread.start()
 
+    stats_subsample = max(1, int(configuration["stats_subsample"]))
+    max_dt = 1.0 / max(1.0, float(configuration["max_fps"]))
+    last_draw = 0.0
+    thresholds: list = []
+
+    try:
+        while not shutdown.is_set():
+            if acq_done.is_set() and stream_thread.finished_event.is_set():
+                break
+            try:
+                item = live_queue.get(timeout=0.05)
+            except queue.Empty:
+                plt.pause(0.001)
+                continue
+
+            kind = item[0]
+            if kind == 'start':
+                _, _count_time, thresholds = item
+                plt.pause(0.001)
+            elif kind == 'error':
+                print(f"[LIVE] {item[1]}")
+                plt.pause(0.001)
+            elif kind == 'end':
+                plt.pause(0.001)  # already logged in StreamReceiver.run
+            elif kind == 'image':
+                img_id, data = int(item[1]), item[2]
+                data = prepare_live_image(data, shape_hw)
+                ss = stats_subsample
+                sample = data[::ss, ::ss]
+                median_counts = float(np.median(sample))
+
+                if im.get_array().shape != data.shape:
+                    im.set_data(np.zeros_like(data))
+                im.set_data(data)
+                lo = median_counts * 0.8
+                hi = max(lo + 1.0, median_counts * 1.2)
+                im.set_clim(lo, hi)
+
+                now = time.time()
+                if now - last_draw >= max_dt:
+                    if median_counts <= 10e3:
+                        ax.set_title(f"Image {img_id} - {median_counts:.0f} cps (th={thresholds} eV)")
+                    elif median_counts <= 10e6:
+                        ax.set_title(f"Image {img_id} - {median_counts/1e3:.1f} kcps (th={thresholds} eV)")
+                    else:
+                        ax.set_title(f"Image {img_id} - {median_counts/1e6:.1f} Mcps (th={thresholds} eV)")
+                    fig.canvas.draw_idle()
+                    fig.canvas.flush_events()
+                    last_draw = now
+                plt.pause(0.001)
     finally:
-        # Stop stream thread
-        if stream_thread:
-            print("Stopping stream receiver...")
-            stream_thread.stop()
-            stream_thread.finished_event.wait(timeout=5.0)
-            print("disarming")
-            c.sendDetectorCommand('disarm')  # writes data internally and disarms; filewriter is disabled
+        print("Stopping stream receiver...")
+        stream_thread.stop()
+        stream_thread.finished_event.wait(timeout=5.0)
+        try:
+            c.sendDetectorCommand('disarm')
+        except Exception:
+            pass
 
     print("All done.")
 

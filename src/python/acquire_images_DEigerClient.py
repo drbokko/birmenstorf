@@ -27,20 +27,20 @@ if __name__ == '__main__':
 
         # File & Naming Settings
         "working_directory": "C:/Measurements/temp", # base directory
-        "measurement_name": f'battery1_5mmFilter',
+        "measurement_name": f'test',
         "acquisition_time": datetime.now().strftime('%Y%m%d_%H%M%S'),
 
         # Data acquisition parameters
-        "thresholds": [8000, 10000],  # Energy thresholds [eV], insertfrom 1 to 2 values. e.g. [10000, 15000] for 2 thresholds
-        "number_of_images":1002,  # Number of images to capture
-        "number_of_triggers":1,
+        "thresholds": [8000],  # Energy thresholds [eV], insertfrom 1 to 2 values. e.g. [10000, 15000] for 2 thresholds
+        "number_of_images":1000,  # Number of images to capture
+        "number_of_triggers":2,
         "exposure_time": 1.0/100.0,  # Exposure time per image [s]. 1/fps
         "sleep_time": 0.0,  # Delay between frames [s]
         
         # Data Acquisition Interfaces
         "monitor": "disabled", # slow, only for framerates below 10 fps
         "filewriter2": "enabled", # save imageso on the DCU on h5 format. 
-        "stream": "disabled", # stream images directly to the client. For high performance it requires a fast connection between DCU and client
+        "stream": "enabled", # stream images directly to the client. For high performance it requires a fast connection between DCU and client
         "save_raw": False,  # Save raw data if using filewriter2, otherwise images are saved as tiff
     }
     # Construct full output directory path and save config

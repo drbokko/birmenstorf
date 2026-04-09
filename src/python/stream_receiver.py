@@ -86,7 +86,6 @@ def parseArgs():
 if __name__ == "__main__":
     args = parseArgs()
 
-    import sys
     import zmq
     import matplotlib.pyplot as plt
 
@@ -116,68 +115,56 @@ if __name__ == "__main__":
         while True:
             message = socket.recv()
             message = cbor2.loads(message, tag_hook=tag_hook)
-            print(f"========== MESSAGE[{message['type']}] ==========")
-            if message['type'] == 'image':
-                print(f'processing image {message["image_id"]+1}')
-                image_num+=1
-                for count, channel in enumerate(channels):
-                    data = np.array(message['data'][channel])
-                    #data2 = np.array(message['data']['threshold_2'])
-                    if args.live:
-                        median_counts=np.median(data).astype(np.float32)
-                        axes[count].set(title=f'Threshold {thresholds[count]/1e3:.0f} keV: {median_counts:.0f} counts -> {median_counts/count_time/1e6:.3f} Mcps/pixel',
-                                        xticks=[], yticks=[])  
-                        axim = axes[count].imshow(data, cmap='gray', vmin=median_counts*0.8, vmax=median_counts*1.2)
-                        #axim2 = ax2.imshow(data2, cmap='jet', vmin=0, vmax=3)
-                        fig.suptitle(f'Image id {message["image_id"]}', fontsize=16)
-                    elif args.direc:
-                        # tifffile.imwrite(f"{args.direc}/{message['series_unique_id']}_{timestamp}_im{message['image_id']}_{channel}.tif", np.array(message['data'][channel]))
-                        filename=f"img_th{count}_{message['image_id']:05d}.tif"
-                        tifffile.imwrite(Path(full_path)/filename, np.array(message['data'][channel]))
-                if args.live:
-                    fig.canvas.flush_events()
-            elif message['type'] == 'start':
+            
+            # print(message.keys())
+            # print(message)
+
+            if message['type'] == 'start':
+                print(f"========== {message['type']} ==========")
+
                 #create directory
                 working_directory = Path(args.direc)
                 acquisition_time = datetime.now().strftime('%Y%m%d_%H%M%S')
                 full_path = Path(working_directory, f"{acquisition_time}_Stream") # name of the folder
                 print(f"Creating folder {full_path}")
-                os.makedirs(full_path)
+                os.makedirs(full_path, exist_ok=True)
                 
-                #save acuisition data
-                filename=f"start_data.txt"
+                #save acquisition data
+                filename=f"detector_settings.txt"
                 with open(Path(full_path)/filename, 'w') as f:
                     f.write(pprint.pformat(message))
 
                 image_num=0
                 count_time=message['count_time']
                 thresholds=[message['threshold_energy']['threshold_1'],message['threshold_energy']['threshold_2']]
-                print(thresholds)
+                channels = message['channels']
                 start_time=time.time()
 
-                channels = message['channels']
-                for val in ['flatfield','pixel_mask']:
-                    if val == 'flatfield':
-                        for count, channel in enumerate(channels):
-                            try:
-                                #data1 = np.zeros(np.shape(np.array(message[val]['threshold_1'])),dtype=np.uint32)
-                                data = np.zeros(np.shape(np.array(message[val][channel])), dtype=np.uint32)
-                                if args.live:
-                                    axim = axes[count].imshow(data, cmap='jet', vmin=0, vmax=2)
-                                    #axim2 = ax2.imshow(data2, cmap='jet', vmin=0, vmax=2)
-                                elif args.direc:
-                                    print(count, channel)
-                                    # tifffile.imwrite(f"{sys.argv[2]}_{message['series_unique_id']}_{val}_{channel}.tif", np.array(message[val][channel]))
-                                    #tifffile.imwrite(f"{sys.argv[2]}_{message['series_unique_id']}_{val}_th2.tif", np.array(message[val]['threshold_2']))
+            
+            elif message['type'] == 'image':
+                print(f"========== {message['type']} - {message['image_id']+1} ==========")
 
-                            except KeyError as e:
-                                if e.args[0] in ['flatfield', 'pixel_mask']:
-                                    print('there was no pixel mask and/or flatfield, did you enable them with "header_detail" == "all" ?')
-                                else:
-                                    print('there was no second threshold value to process, did you enable the second threshold in the settings?')
-                        if args.live:
-                            fig.canvas.flush_events()
+                image_num+=1
+                for count, channel in enumerate(channels):
+                    data = np.array(message['data'][channel])
+                    if args.live:
+                        median_counts=np.median(data).astype(np.float32)
+                        axes[count].set(title=f'Threshold {thresholds[count]/1e3:.0f} keV: {median_counts:.0f} counts -> {median_counts/count_time/1e6:.3f} Mcps/pixel',
+                                        xticks=[], yticks=[])  
+                        axim = axes[count].imshow(data, cmap='gray', vmin=median_counts*0.8, vmax=median_counts*1.2)
+                        fig.suptitle(f'Image id {message["image_id"]}', fontsize=16)
+                    elif args.direc:
+                        filename=f"img_th{count+1}_{message['image_id']:05d}.tif"
+                        tifffile.imwrite(Path(full_path)/filename, np.array(message['data'][channel]))
+                if args.live:
+                    fig.canvas.flush_events()
+            
             elif message['type'] == 'end':
+                print(f"========== {message['type']} ==========")
+
                 elapsed_time=time.time()-start_time
-                print(f"{image_num} images in {elapsed_time:.1f} ({int(image_num/elapsed_time):d} Hz) saved in {full_path}")
+                fps_received = image_num/elapsed_time
+                Gbits_received = image_num*len(channels)*data.nbytes*8/1e9/elapsed_time
+                print(f"{image_num} images ({len(channels)} Ths) in {elapsed_time:.1f} ({int(fps_received):d} Hz, {Gbits_received:.2f} Gbit/s) saved in {full_path}")
+
 

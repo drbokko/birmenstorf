@@ -11,3 +11,5 @@ tifffile
 scipy
 silx
 dectris-compression
+hdf5plugin
+requests
