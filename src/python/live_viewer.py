@@ -15,15 +15,15 @@ import numpy as np
 ############################################################
 configuration = {
     # Detector IP and Initialization
-    "DCU_IP": '192.168.30.66',
+    "DCU_IP": 'dev-si-e2dcu-06.dectris.local',
     "force_initialization": False,
 
     # Data acquisition parameters
-    "thresholds": [15000],  # Energy thresholds [eV], 1..4 values supported
+    "thresholds": [5000],  # Energy thresholds [eV], 1..4 values supported
     "number_of_images": 1,       # Number of images to capture
     "number_of_triggers": 1000,       # Number of trigger to send
-    "exposure_time": 1/5.0,          # Exposure time per image [s]
-    "sleep_time": 0.2,             # Delay between frames [s]
+    "exposure_time": 1.0/1.0,          # Exposure time per image [s]
+    "sleep_time": 0.1,             # Delay between frames [s]
 
     # Live viewer performance knobs
     "live_every": 1,               # Show every Nth frame in live view
@@ -121,6 +121,21 @@ class StreamReceiver(threading.Thread):
         self._ax = None
         self._im = None
         self._last_draw = 0.0
+        self._image_geom_shape = None  # (rows, cols) when extent/aspect last applied
+
+    def _apply_image_geometry(self, data: np.ndarray):
+        """Match axes extent and aspect to array shape (placeholder is 10x10; without this, limits stay square)."""
+        nr, nc = data.shape[:2]
+        if self._image_geom_shape == (nr, nc):
+            return
+        self._image_geom_shape = (nr, nc)
+        # origin='upper': first row at top; extent (left, right, bottom, top)
+        self._im.set_extent((0, nc, 0, nr))
+        self._ax.set_aspect('equal')
+        # Wide detectors: window aspect roughly follows data so the strip is not a thin line
+        if self._fig is not None and nr > 0:
+            ar = nc / float(nr)
+            self._fig.set_size_inches(min(16, max(8, 5 * ar)), 5)
 
     def _setup_live(self):
         import matplotlib.pyplot as plt  # lazy import
@@ -129,7 +144,15 @@ class StreamReceiver(threading.Thread):
         ax.set_title("Threshold 1")
         ax.set_xticks([]); ax.set_yticks([])
         # placeholder image; real shape set on first frame
-        im = ax.imshow(np.zeros((10, 10), dtype=np.uint16), cmap='gray', vmin=0, vmax=1, animated=False)
+        im = ax.imshow(
+            np.zeros((10, 10), dtype=np.uint16),
+            cmap='gray',
+            vmin=0,
+            vmax=1,
+            origin='upper',
+            aspect='equal',
+            animated=False,
+        )
         self._fig, self._ax, self._im = fig, ax, im
 
     def stop(self):
@@ -190,6 +213,7 @@ class StreamReceiver(threading.Thread):
                         if self._im.get_array().shape != data.shape:
                             self._im.set_data(np.zeros_like(data))
                         self._im.set_data(data)
+                        self._apply_image_geometry(data)
 
                         # contrast window around median; guard against zero span
                         lo = median_counts * 0.8
@@ -240,6 +264,7 @@ if __name__ == '__main__':
     print(f"Detector humidity:\t\t\t{c.detectorStatus('humidity')['value']:.1f} %")
 
     # Configure Detector
+    c.setDetectorConfig('auto_summation', False)
     c.setDetectorConfig("countrate_correction_applied", False)
     c.setDetectorConfig('retrigger', False)
     c.setDetectorConfig('counting_mode', 'normal')
@@ -248,8 +273,6 @@ if __name__ == '__main__':
     c.setDetectorConfig('mask_to_zero', True)  # pixels marked in the pixel_mask will be set to zero
     c.setDetectorConfig("test_image_mode", "")
     # c.setDetectorConfig("test_image_value", 100)
-
-    c.setDetectorConfig("photon_energy", 10000)  # example value for monochromatic
 
     # only one threshold (device has 2 thresholds total; we enable only the first and disable the second)
     c.setDetectorConfig("threshold/1/mode", 'enabled')
@@ -261,7 +284,6 @@ if __name__ == '__main__':
     c.setDetectorConfig('frame_time', configuration["exposure_time"] + configuration["sleep_time"]) 
     c.setDetectorConfig("nimages", configuration["number_of_images"]) 
     c.setDetectorConfig("ntrigger", configuration["number_of_triggers"])  
-    c.setDetectorConfig('auto_summation', False)
 
     print(f'count_time= {c.detectorConfig("count_time")["value"]}')
     print(f'frame_time= {c.detectorConfig("frame_time")["value"]}')

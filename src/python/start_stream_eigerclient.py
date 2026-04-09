@@ -109,7 +109,6 @@ if __name__ == '__main__':
         c.setDetectorConfig("flatfield_correction_applied", False)
         logging.info("Flatfield correction disabled")
 
-    # c.setDetectorConfig("photon_energy",10000) # set for example to 80,0000 eV, only for monochromatic
 
     # Set Thresholds
     logging.info(f"Configuring {len(configuration['thresholds'])} threshold(s): {configuration['thresholds']}")
